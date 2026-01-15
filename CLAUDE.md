@@ -39,6 +39,15 @@ make tidy              # Tidy go.mod
 go test -v -run TestAcquireFromPool ./internal/store/...
 ```
 
+**Cleanup (IMPORTANT):**
+```bash
+make clean-demos       # Remove orphan demo containers
+make clean-data        # Flush Valkey data (instances, pool, rate limits)
+make clean-all         # Full cleanup: build + demos + data
+```
+
+**Note:** When the server is killed, demo containers become orphans (TTL cleanup requires running server). Always run `make clean-demos` after testing to remove orphan containers. Use `make clean-data` to reset Valkey state between test runs.
+
 ## Architecture
 
 ```
