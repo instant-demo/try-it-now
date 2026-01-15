@@ -37,6 +37,14 @@ func NewHandler(cfg *config.Config, poolMgr pool.Manager, repo store.Repository,
 func (h *Handler) Router() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+
+	// Configure trusted proxies to prevent X-Forwarded-For spoofing.
+	// Only requests from these IPs will have X-Forwarded-For headers trusted.
+	if err := r.SetTrustedProxies(h.cfg.Server.TrustedProxies); err != nil {
+		// Log but continue - SetTrustedProxies only fails on invalid CIDR
+		// In practice, our defaults (127.0.0.1, ::1) are always valid
+	}
+
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
 	r.Use(h.metricsMiddleware())

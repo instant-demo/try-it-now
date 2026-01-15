@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,11 +26,12 @@ type LogConfig struct {
 }
 
 type ServerConfig struct {
-	Host         string
-	Port         int
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
-	APIKey       string
+	Host           string
+	Port           int
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
+	APIKey         string
+	TrustedProxies []string // IPs allowed to set X-Forwarded-For
 }
 
 type PoolConfig struct {
@@ -94,11 +96,12 @@ func Load() *Config {
 			Format: getEnv("LOG_FORMAT", "json"),
 		},
 		Server: ServerConfig{
-			Host:         getEnv("SERVER_HOST", "0.0.0.0"),
-			Port:         getEnvInt("SERVER_PORT", 8080),
-			ReadTimeout:  getEnvDuration("SERVER_READ_TIMEOUT", 30*time.Second),
-			WriteTimeout: getEnvDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
-			APIKey:       getEnv("API_KEY", ""),
+			Host:           getEnv("SERVER_HOST", "0.0.0.0"),
+			Port:           getEnvInt("SERVER_PORT", 8080),
+			ReadTimeout:    getEnvDuration("SERVER_READ_TIMEOUT", 30*time.Second),
+			WriteTimeout:   getEnvDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
+			APIKey:         getEnv("API_KEY", ""),
+			TrustedProxies: getEnvStringSlice("TRUSTED_PROXIES", []string{"127.0.0.1", "::1"}),
 		},
 		Pool: PoolConfig{
 			TargetSize:         getEnvInt("POOL_TARGET_SIZE", 10),
@@ -188,6 +191,22 @@ func getEnvBool(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {
 		if b, err := strconv.ParseBool(value); err == nil {
 			return b
+		}
+	}
+	return defaultValue
+}
+
+func getEnvStringSlice(key string, defaultValue []string) []string {
+	if value := os.Getenv(key); value != "" {
+		parts := strings.Split(value, ",")
+		result := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		if len(result) > 0 {
+			return result
 		}
 	}
 	return defaultValue
