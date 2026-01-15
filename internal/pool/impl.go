@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/boss/demo-multiplexer/internal/container"
+	"github.com/boss/demo-multiplexer/internal/database"
 	"github.com/boss/demo-multiplexer/internal/domain"
 	"github.com/boss/demo-multiplexer/internal/metrics"
 	"github.com/boss/demo-multiplexer/internal/proxy"
@@ -30,6 +31,7 @@ type PoolManager struct {
 	repo    store.Repository
 	runtime container.Runtime
 	proxy   proxy.RouteManager
+	psDB    *database.PrestaShopDB // PrestaShop database for post-restore operations (optional)
 	logger  *logging.Logger
 	metrics *metrics.Collector
 
@@ -46,11 +48,13 @@ type PoolManager struct {
 }
 
 // NewPoolManager creates a new pool manager.
+// psDB is optional and can be nil for non-CRIU mode or when database operations are not needed.
 func NewPoolManager(
 	cfg ManagerConfig,
 	repo store.Repository,
 	runtime container.Runtime,
 	proxyMgr proxy.RouteManager,
+	psDB *database.PrestaShopDB,
 	containerImage string,
 	networkID string,
 	baseDomain string,
@@ -63,6 +67,7 @@ func NewPoolManager(
 		repo:           repo,
 		runtime:        runtime,
 		proxy:          proxyMgr,
+		psDB:           psDB,
 		containerImage: containerImage,
 		networkID:      networkID,
 		baseDomain:     baseDomain,
@@ -128,6 +133,17 @@ func (m *PoolManager) Release(ctx context.Context, instanceID string) error {
 	// Remove route from proxy
 	if err := m.proxy.RemoveRoute(ctx, instance.Hostname); err != nil {
 		m.logger.Warn("Failed to remove route for instance", "instanceID", instanceID, "error", err)
+	}
+
+	// Drop prefixed tables from shared database before stopping container
+	if m.psDB != nil && instance.DBPrefix != "" {
+		if err := m.psDB.DropPrefixedTables(ctx, instance.DBPrefix); err != nil {
+			m.logger.Warn("Failed to drop prefixed tables",
+				"instanceID", instanceID, "dbPrefix", instance.DBPrefix, "error", err)
+		} else {
+			m.logger.Info("Dropped prefixed tables",
+				"instanceID", instanceID, "dbPrefix", instance.DBPrefix)
+		}
 	}
 
 	// Stop container
@@ -300,6 +316,19 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 				m.metrics.CRIURestoreDuration.Observe(time.Since(criuStart).Seconds())
 			}
 			m.logger.Info("Restored instance from checkpoint", "instanceID", instance.ID, "port", port)
+
+			// Update PrestaShop domain configuration after CRIU restore
+			if m.psDB != nil {
+				fullDomain := hostname + "." + m.baseDomain
+				if err := m.psDB.UpdateDomain(ctx, dbPrefix, fullDomain); err != nil {
+					m.logger.Warn("Failed to update domain after CRIU restore", "error", err)
+				}
+				if err := m.psDB.ClearCaches(ctx, dbPrefix); err != nil {
+					m.logger.Warn("Failed to clear caches after CRIU restore", "error", err)
+				}
+				m.logger.Info("Updated PrestaShop domain after CRIU restore",
+					"hostname", hostname, "domain", fullDomain, "dbPrefix", dbPrefix)
+			}
 		}
 	}
 

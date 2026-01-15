@@ -12,6 +12,7 @@ import (
 	"github.com/boss/demo-multiplexer/internal/api"
 	"github.com/boss/demo-multiplexer/internal/config"
 	"github.com/boss/demo-multiplexer/internal/container"
+	"github.com/boss/demo-multiplexer/internal/database"
 	"github.com/boss/demo-multiplexer/internal/metrics"
 	"github.com/boss/demo-multiplexer/internal/pool"
 	"github.com/boss/demo-multiplexer/internal/proxy"
@@ -46,6 +47,18 @@ func main() {
 	ctx := context.Background()
 	if err := repo.InitializePorts(ctx); err != nil {
 		logger.Fatal("Failed to initialize ports", "error", err)
+	}
+
+	// Create PrestaShop database connection for post-CRIU operations
+	var psDB *database.PrestaShopDB
+	psDB, err = database.NewPrestaShopDB(&cfg.PrestaShop)
+	if err != nil {
+		// Database is optional - warn but continue without it
+		logger.Warn("Failed to connect to PrestaShop database - CRIU post-restore operations will be skipped", "error", err)
+		psDB = nil
+	} else {
+		defer psDB.Close()
+		logger.Info("Connected to PrestaShop database")
 	}
 
 	// Create NATS Publisher
@@ -124,6 +137,7 @@ func main() {
 		repo,
 		runtime,
 		proxyMgr,
+		psDB,
 		cfg.Container.Image,
 		cfg.Container.Network,
 		cfg.Proxy.BaseDomain,
