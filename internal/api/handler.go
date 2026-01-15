@@ -46,6 +46,7 @@ func (h *Handler) Router() *gin.Engine {
 	}
 
 	r.Use(gin.Recovery())
+	r.Use(RequestID())
 	r.Use(gin.Logger())
 	r.Use(h.metricsMiddleware())
 
@@ -151,20 +152,41 @@ type ErrorResponse struct {
 	Details string `json:"details,omitempty"`
 }
 
+// HealthResponse for GET /health
+type HealthResponse struct {
+	Status string `json:"status"`
+	Mode   string `json:"mode,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// ExtendResponse for POST /demo/:id/extend
+type ExtendResponse struct {
+	ID           string     `json:"id"`
+	ExpiresAt    *time.Time `json:"expires_at"`
+	TTLRemaining int        `json:"ttl_remaining"`
+}
+
+// ReleaseResponse for DELETE /demo/:id
+type ReleaseResponse struct {
+	ID      string `json:"id"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
 // health returns a simple health check response.
 func (h *Handler) health(c *gin.Context) {
 	// Check store connectivity
 	if err := h.store.Ping(c.Request.Context()); err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"status": "unhealthy",
-			"error":  "store unavailable",
+		c.JSON(http.StatusServiceUnavailable, HealthResponse{
+			Status: "unhealthy",
+			Error:  "store unavailable",
 		})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"status": "ok",
-		"mode":   h.cfg.Container.Mode,
+	c.JSON(http.StatusOK, HealthResponse{
+		Status: "ok",
+		Mode:   h.cfg.Container.Mode,
 	})
 }
 
@@ -248,7 +270,9 @@ func (h *Handler) acquireDemo(c *gin.Context) {
 		// Log but don't fail - instance is already assigned
 	}
 
-	// Set user IP on instance
+	// Set user IP on instance for audit/analytics purposes. Error ignored because
+	// instance is already successfully acquired - failing to persist the IP update
+	// does not affect user experience or instance functionality.
 	instance.UserIP = clientIP
 	_ = h.store.SaveInstance(ctx, instance)
 
@@ -368,10 +392,10 @@ func (h *Handler) extendDemo(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"id":            instance.ID,
-		"ttl_remaining": int(instance.TTLRemaining().Seconds()),
-		"expires_at":    instance.ExpiresAt,
+	c.JSON(http.StatusOK, ExtendResponse{
+		ID:           instance.ID,
+		TTLRemaining: int(instance.TTLRemaining().Seconds()),
+		ExpiresAt:    instance.ExpiresAt,
 	})
 }
 
@@ -406,10 +430,10 @@ func (h *Handler) releaseDemo(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"id":      id,
-		"status":  "released",
-		"message": "Demo instance has been released",
+	c.JSON(http.StatusOK, ReleaseResponse{
+		ID:      id,
+		Status:  "released",
+		Message: "Demo instance has been released",
 	})
 }
 
