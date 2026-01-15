@@ -3,8 +3,6 @@ package container
 import (
 	"context"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -230,7 +228,8 @@ func (r *PodmanRuntime) Start(ctx context.Context, opts StartOptions) (*domain.I
 
 	// Start container
 	if err := containers.Start(r.conn, createResponse.ID, nil); err != nil {
-		// Cleanup on failure
+		// Clean up container on start failure. Error ignored because container may not
+		// have been fully created, and orphaned containers are cleaned by external process.
 		_, _ = containers.Remove(r.conn, createResponse.ID, new(containers.RemoveOptions).WithForce(true))
 		return nil, fmt.Errorf("failed to start container: %w", err)
 	}
@@ -330,41 +329,11 @@ func (r *PodmanRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 		return false, nil
 	}
 
-	addr := fmt.Sprintf("localhost:%d", hostPort)
-
-	// TCP check first (faster, catches connection refused quickly)
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		r.logger.Debug("Health check TCP failed", "containerID", containerID[:12], "error", err)
-		return false, nil
-	}
-	conn.Close()
-
-	// HTTP GET to verify application responds
-	url := fmt.Sprintf("http://%s/", addr)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false, nil
-	}
-
-	resp, err := r.healthClient.Do(req)
-	if err != nil {
-		r.logger.Debug("Health check HTTP failed", "containerID", containerID[:12], "error", err)
-		return false, nil
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-	}()
-
-	healthy := resp.StatusCode >= 200 && resp.StatusCode < 500
-	if !healthy {
-		r.logger.Debug("Health check HTTP unexpected status", "containerID", containerID[:12], "status", resp.StatusCode)
-	}
-	return healthy, nil
+	return CheckContainerHealth(ctx, r.healthClient, hostPort, containerID, r.logger)
 }
 
 // buildEnvVars constructs environment variables for PrestaShop container.
+// WARNING: Contains sensitive data (DB_PASSWD, ADMIN_PASSWD). Never log this output.
 func (r *PodmanRuntime) buildEnvVars(opts StartOptions) map[string]string {
 	env := map[string]string{
 		"PS_DOMAIN":         fmt.Sprintf("%s.%s", opts.Hostname, r.proxyCfg.BaseDomain),

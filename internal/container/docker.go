@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -128,7 +126,8 @@ func (r *DockerRuntime) Start(ctx context.Context, opts StartOptions) (*domain.I
 
 	// Start container
 	if err := r.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		// Clean up the created container on start failure
+		// Clean up container on start failure. Error ignored because container may not
+		// have been fully created, and orphaned containers are cleaned by external process.
 		_ = r.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
 		return nil, fmt.Errorf("failed to start container: %w", err)
 	}
@@ -211,8 +210,6 @@ func (r *DockerRuntime) Inspect(ctx context.Context, containerID string) (*Conta
 }
 
 // HealthCheck checks if the container is responding to HTTP requests.
-// It first performs a TCP connect check (faster) to verify the process is listening,
-// then makes an HTTP request to verify the application responds.
 func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bool, error) {
 	info, err := r.Inspect(ctx, containerID)
 	if err != nil {
@@ -229,43 +226,11 @@ func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 		return false, nil
 	}
 
-	addr := fmt.Sprintf("localhost:%d", hostPort)
-
-	// First: TCP connect check (faster than HTTP, catches "connection refused" quickly)
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		// Log but don't fail - connection refused is expected during startup
-		r.logger.Debug("Health check TCP failed", "containerID", containerID[:12], "error", err)
-		return false, nil
-	}
-	conn.Close()
-
-	// Then: HTTP GET to verify application responds
-	url := fmt.Sprintf("http://%s/", addr)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false, nil
-	}
-
-	resp, err := r.healthClient.Do(req)
-	if err != nil {
-		r.logger.Debug("Health check HTTP failed", "containerID", containerID[:12], "error", err)
-		return false, nil
-	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-	}()
-
-	// Any response (even 302 redirect) means the container is healthy
-	healthy := resp.StatusCode >= 200 && resp.StatusCode < 500
-	if !healthy {
-		r.logger.Debug("Health check HTTP unexpected status", "containerID", containerID[:12], "status", resp.StatusCode)
-	}
-	return healthy, nil
+	return CheckContainerHealth(ctx, r.healthClient, hostPort, containerID, r.logger)
 }
 
 // buildEnvVars constructs the environment variables for a PrestaShop container.
+// WARNING: Contains sensitive data (DB_PASSWD, ADMIN_PASSWD). Never log this output.
 func (r *DockerRuntime) buildEnvVars(opts StartOptions) []string {
 	env := []string{
 		fmt.Sprintf("PS_DOMAIN=%s.%s", opts.Hostname, r.proxyCfg.BaseDomain),
