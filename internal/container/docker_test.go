@@ -166,17 +166,33 @@ func TestDockerRuntime_HealthCheck(t *testing.T) {
 		_ = runtime.Stop(ctx, instance.ContainerID)
 	}()
 
-	// Wait for nginx to start
-	time.Sleep(3 * time.Second)
+	// Poll for health using the same pattern as production code
+	// This tests that health check succeeds within a reasonable time
+	timeout := time.After(30 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
-	// Health check should pass for nginx
-	healthy, err := runtime.HealthCheck(ctx, instance.ContainerID)
-	if err != nil {
-		t.Fatalf("HealthCheck() error = %v", err)
-	}
+	// Brief initial delay (start period)
+	time.Sleep(1 * time.Second)
 
-	if !healthy {
-		t.Error("HealthCheck() returned false, expected true for running nginx")
+	attempt := 0
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("Timed out waiting for container to be healthy after %d attempts", attempt)
+		case <-ticker.C:
+			attempt++
+			healthy, err := runtime.HealthCheck(ctx, instance.ContainerID)
+			if err != nil {
+				t.Logf("Attempt %d: HealthCheck error: %v", attempt, err)
+				continue
+			}
+			if healthy {
+				t.Logf("Container became healthy after %d attempts", attempt)
+				return // Test passed
+			}
+			t.Logf("Attempt %d: Container not yet healthy", attempt)
+		}
 	}
 }
 

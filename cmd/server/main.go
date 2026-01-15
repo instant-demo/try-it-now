@@ -16,9 +16,13 @@ import (
 	"github.com/boss/demo-multiplexer/internal/pool"
 	"github.com/boss/demo-multiplexer/internal/proxy"
 	"github.com/boss/demo-multiplexer/internal/store"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load .env file if present (ignore error if file doesn't exist)
+	_ = godotenv.Load()
+
 	cfg := config.Load()
 
 	log.Printf("Starting Demo Multiplexer (mode=%s)", cfg.Container.Mode)

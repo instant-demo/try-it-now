@@ -1,4 +1,4 @@
-.PHONY: all build run test clean dev infra-up infra-down lint clean-demos clean-data clean-all stop
+.PHONY: all build run test test-e2e clean dev infra-up infra-down lint clean-demos clean-data clean-all stop
 
 # Build variables
 BINARY_NAME=demo-multiplexer
@@ -20,13 +20,17 @@ build-linux:
 run: build
 	./$(BUILD_DIR)/$(BINARY_NAME)
 
-# Run in development mode (uses Docker, not Podman+CRIU)
+# Run in development mode (Go loads .env via godotenv)
 dev:
-	CONTAINER_MODE=docker $(GO) run ./cmd/server
+	$(GO) run ./cmd/server
 
 # Run tests
 test:
 	$(GO) test -v ./...
+
+# Run E2E tests (requires: make infra-up && make dev in another terminal)
+test-e2e:
+	$(GO) test -v -tags=e2e -timeout 10m ./tests/integration/...
 
 # Run tests with coverage
 test-coverage:

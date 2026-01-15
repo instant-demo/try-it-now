@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -197,6 +199,8 @@ func (r *DockerRuntime) Inspect(ctx context.Context, containerID string) (*Conta
 }
 
 // HealthCheck checks if the container is responding to HTTP requests.
+// It first performs a TCP connect check (faster) to verify the process is listening,
+// then makes an HTTP request to verify the application responds.
 func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bool, error) {
 	info, err := r.Inspect(ctx, containerID)
 	if err != nil {
@@ -213,12 +217,23 @@ func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 		return false, nil
 	}
 
-	// Make HTTP request with timeout
+	addr := fmt.Sprintf("localhost:%d", hostPort)
+
+	// First: TCP connect check (faster than HTTP, catches "connection refused" quickly)
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		// Log but don't fail - connection refused is expected during startup
+		log.Printf("Health check TCP failed for %s: %v", containerID[:12], err)
+		return false, nil
+	}
+	conn.Close()
+
+	// Then: HTTP GET to verify application responds
 	httpClient := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	url := fmt.Sprintf("http://localhost:%d/", hostPort)
+	url := fmt.Sprintf("http://%s/", addr)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false, nil
@@ -226,6 +241,7 @@ func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		log.Printf("Health check HTTP failed for %s: %v", containerID[:12], err)
 		return false, nil
 	}
 	defer func() {
@@ -234,7 +250,11 @@ func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 	}()
 
 	// Any response (even 302 redirect) means the container is healthy
-	return resp.StatusCode >= 200 && resp.StatusCode < 500, nil
+	healthy := resp.StatusCode >= 200 && resp.StatusCode < 500
+	if !healthy {
+		log.Printf("Health check HTTP status %d for %s", resp.StatusCode, containerID[:12])
+	}
+	return healthy, nil
 }
 
 // buildEnvVars constructs the environment variables for a PrestaShop container.

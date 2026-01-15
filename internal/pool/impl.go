@@ -292,24 +292,32 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 }
 
 // waitForReady waits for a container to pass health checks.
+// It includes a brief initial delay to allow the container process to start,
+// then polls at 1-second intervals until the container responds.
 func (m *PoolManager) waitForReady(ctx context.Context, instance *domain.Instance) error {
+	// Give container a moment to start its internal process (industry best practice: "start period")
+	time.Sleep(1 * time.Second)
+
 	timeout := time.After(2 * time.Minute)
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(1 * time.Second) // Reduced from 2s for faster detection
 	defer ticker.Stop()
 
+	attempt := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timeout:
-			return fmt.Errorf("timeout waiting for container to be ready")
+			return fmt.Errorf("timeout waiting for container to be ready after %d attempts", attempt)
 		case <-ticker.C:
+			attempt++
 			healthy, err := m.runtime.HealthCheck(ctx, instance.ContainerID)
 			if err != nil {
-				// Container might not be running yet
+				log.Printf("Health check error for %s (attempt %d): %v", instance.ID, attempt, err)
 				continue
 			}
 			if healthy {
+				log.Printf("Container %s ready after %d attempts", instance.ID, attempt)
 				return nil
 			}
 		}
