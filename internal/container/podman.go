@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/boss/demo-multiplexer/internal/domain"
 	"github.com/containers/podman/v5/pkg/bindings"
 	"github.com/containers/podman/v5/pkg/bindings/containers"
+	"github.com/containers/podman/v5/pkg/bindings/system"
 	"github.com/containers/podman/v5/pkg/specgen"
 	nettypes "go.podman.io/common/libnetwork/types"
 )
@@ -57,34 +57,35 @@ func NewPodmanRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfi
 	return runtime, nil
 }
 
-// checkCRIUAvailability verifies CRIU is installed and meets version requirements.
+// checkCRIUAvailability verifies CRIU is available via Podman API.
+// This checks the Podman host info rather than local process UID, which is
+// essential for macOS where Go runs as user but Podman VM runs rootful.
 func (r *PodmanRuntime) checkCRIUAvailability() {
-	// Check if running as root (required for CRIU)
-	if os.Geteuid() != 0 {
-		log.Printf("Warning: Not running as root - CRIU checkpoint/restore disabled")
-		r.criuAvailable = false
-		return
-	}
-
-	// Check CRIU is installed
-	cmd := exec.Command("criu", "--version")
-	output, err := cmd.Output()
+	// Get Podman system info via API
+	info, err := system.Info(r.conn, nil)
 	if err != nil {
-		log.Printf("Warning: CRIU not found - checkpoint/restore disabled: %v", err)
+		log.Printf("Warning: Failed to get Podman info - CRIU disabled: %v", err)
 		r.criuAvailable = false
 		return
 	}
 
-	// Parse version (format: "Version: 3.17.1")
-	versionStr := strings.TrimSpace(string(output))
-	r.criuVersion = r.extractVersion(versionStr)
-
-	// Check minimum version 3.11
-	if !r.isVersionSupported(r.criuVersion) {
-		log.Printf("Warning: CRIU version %s < 3.11 - checkpoint/restore disabled", r.criuVersion)
+	// Check if Podman is running rootful (required for CRIU)
+	if info.Host.Security.Rootless {
+		log.Printf("Warning: Podman is rootless - CRIU checkpoint/restore disabled")
 		r.criuAvailable = false
 		return
 	}
+
+	// Check if OCI runtime has CRIU support compiled in
+	// crun reports "+CRIU" in version string when CRIU is available
+	if info.Host.OCIRuntime == nil || !strings.Contains(info.Host.OCIRuntime.Version, "+CRIU") {
+		log.Printf("Warning: OCI runtime does not have CRIU support - checkpoint/restore disabled")
+		r.criuAvailable = false
+		return
+	}
+
+	// CRIU is available via the OCI runtime
+	r.criuVersion = "available"
 
 	// Check checkpoint file exists
 	if _, err := os.Stat(r.cfg.CheckpointPath); os.IsNotExist(err) {
@@ -94,7 +95,7 @@ func (r *PodmanRuntime) checkCRIUAvailability() {
 	}
 
 	r.criuAvailable = true
-	log.Printf("CRIU %s available - checkpoint/restore enabled", r.criuVersion)
+	log.Printf("CRIU available via %s - checkpoint/restore enabled", info.Host.OCIRuntime.Name)
 }
 
 // extractVersion extracts version string from CRIU output.

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/boss/demo-multiplexer/internal/config"
@@ -18,6 +19,9 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
+
+// instanceIDCounter provides unique suffixes for instance ID generation.
+var instanceIDCounter uint64
 
 // ErrCRIUNotSupported is returned when attempting CRIU restore in Docker mode.
 var ErrCRIUNotSupported = errors.New("CRIU checkpoint restore not supported in Docker mode")
@@ -283,10 +287,10 @@ func (r *DockerRuntime) buildEnvVars(opts StartOptions) []string {
 }
 
 // generateInstanceID creates a unique instance ID.
+// Uses atomic counter combined with timestamp for guaranteed uniqueness.
 func generateInstanceID() string {
-	// Use timestamp-based ID for simplicity
-	// In production, consider using UUID or similar
-	return fmt.Sprintf("demo-%d", time.Now().UnixNano())
+	n := atomic.AddUint64(&instanceIDCounter, 1)
+	return fmt.Sprintf("demo-%d-%d", time.Now().Unix(), n)
 }
 
 // Compile-time check that DockerRuntime implements Runtime
