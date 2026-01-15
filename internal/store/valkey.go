@@ -491,5 +491,15 @@ func (r *ValkeyRepository) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Compile-time check that ValkeyRepository implements Repository
-var _ Repository = (*ValkeyRepository)(nil)
+// Compile-time checks that ValkeyRepository implements all interfaces
+var (
+	_ InstanceStore   = (*ValkeyRepository)(nil)
+	_ PoolStore       = (*ValkeyRepository)(nil)
+	_ InstanceLister  = (*ValkeyRepository)(nil)
+	_ TTLManager      = (*ValkeyRepository)(nil)
+	_ PortAllocator   = (*ValkeyRepository)(nil)
+	_ RateLimiter     = (*ValkeyRepository)(nil)
+	_ StatsCollector  = (*ValkeyRepository)(nil)
+	_ HealthChecker   = (*ValkeyRepository)(nil)
+	_ Repository      = (*ValkeyRepository)(nil)
+)

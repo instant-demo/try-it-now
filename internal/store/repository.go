@@ -7,41 +7,66 @@ import (
 	"github.com/boss/demo-multiplexer/internal/domain"
 )
 
-// Repository defines the interface for state persistence.
-// Implementation: Valkey (Redis-compatible).
-type Repository interface {
-	// Instance operations
+// InstanceStore handles instance CRUD operations.
+type InstanceStore interface {
 	SaveInstance(ctx context.Context, instance *domain.Instance) error
 	GetInstance(ctx context.Context, id string) (*domain.Instance, error)
 	DeleteInstance(ctx context.Context, id string) error
 	UpdateInstanceState(ctx context.Context, id string, state domain.InstanceState) error
+}
 
-	// Pool operations (atomic)
+// PoolStore handles pool queue operations.
+type PoolStore interface {
 	AcquireFromPool(ctx context.Context) (*domain.Instance, error)
 	AddToPool(ctx context.Context, instance *domain.Instance) error
 	RemoveFromPool(ctx context.Context, id string) error
+}
 
-	// Listing
+// InstanceLister provides instance listing operations.
+type InstanceLister interface {
 	ListByState(ctx context.Context, state domain.InstanceState) ([]*domain.Instance, error)
 	ListExpired(ctx context.Context) ([]*domain.Instance, error)
+}
 
-	// TTL operations
+// TTLManager handles instance TTL operations.
+type TTLManager interface {
 	SetInstanceTTL(ctx context.Context, id string, ttl time.Duration) error
 	GetInstanceTTL(ctx context.Context, id string) (time.Duration, error)
 	ExtendInstanceTTL(ctx context.Context, id string, extension time.Duration) error
+}
 
-	// Port allocation
+// PortAllocator handles port management.
+type PortAllocator interface {
 	AllocatePort(ctx context.Context) (int, error)
 	ReleasePort(ctx context.Context, port int) error
+}
 
-	// Rate limiting
+// RateLimiter handles rate limiting.
+type RateLimiter interface {
 	CheckRateLimit(ctx context.Context, ip string, hourlyLimit, dailyLimit int) (bool, error)
 	IncrementRateLimit(ctx context.Context, ip string) error
+}
 
-	// Statistics
+// StatsCollector handles statistics and counters.
+type StatsCollector interface {
 	GetPoolStats(ctx context.Context) (*domain.PoolStats, error)
 	IncrementCounter(ctx context.Context, name string) error
+}
 
-	// Health
+// HealthChecker provides health check capability.
+type HealthChecker interface {
 	Ping(ctx context.Context) error
+}
+
+// Repository composes all focused interfaces for backward compatibility.
+// Implementation: Valkey (Redis-compatible).
+type Repository interface {
+	InstanceStore
+	PoolStore
+	InstanceLister
+	TTLManager
+	PortAllocator
+	RateLimiter
+	StatsCollector
+	HealthChecker
 }
