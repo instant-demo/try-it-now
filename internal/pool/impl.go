@@ -64,6 +64,10 @@ func (m *PoolManager) Acquire(ctx context.Context) (*domain.Instance, error) {
 	if err := m.repo.SetInstanceTTL(ctx, instance.ID, m.cfg.DefaultTTL); err != nil {
 		// Log but don't fail - instance is already assigned
 		log.Printf("Warning: failed to set TTL for instance %s: %v", instance.ID, err)
+	} else {
+		// Update in-memory instance to reflect the TTL we just set
+		expiresAt := time.Now().Add(m.cfg.DefaultTTL)
+		instance.ExpiresAt = &expiresAt
 	}
 
 	// Add route to proxy
