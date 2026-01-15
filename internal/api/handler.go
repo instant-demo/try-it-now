@@ -208,6 +208,17 @@ func (h *Handler) acquireDemo(c *gin.Context) {
 			})
 			return
 		}
+		if errors.Is(err, domain.ErrRouteCreationFailed) {
+			if h.metrics != nil {
+				h.metrics.AcquisitionsTotal.WithLabelValues("route_failed").Inc()
+			}
+			c.JSON(http.StatusServiceUnavailable, ErrorResponse{
+				Error:   "Failed to configure routing for instance",
+				Code:    "ROUTE_FAILED",
+				Details: "Please try again in a few moments",
+			})
+			return
+		}
 		if h.metrics != nil {
 			h.metrics.AcquisitionsTotal.WithLabelValues("error").Inc()
 		}

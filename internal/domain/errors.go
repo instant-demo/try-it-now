@@ -32,4 +32,7 @@ var (
 
 	// ErrRouteNotFound is returned when the route doesn't exist.
 	ErrRouteNotFound = errors.New("route not found")
+
+	// ErrRouteCreationFailed is returned when Caddy route creation fails during acquisition.
+	ErrRouteCreationFailed = errors.New("failed to create route for instance")
 )

@@ -35,10 +35,11 @@ type PoolManager struct {
 	logger  *logging.Logger
 	metrics *metrics.Collector
 
-	stopCh  chan struct{}
-	doneCh  chan struct{}
-	mu      sync.Mutex
-	running bool
+	stopCh      chan struct{}
+	doneCh      chan struct{}
+	replenishCh chan struct{} // Bounded channel for async replenish triggers (buffer of 1)
+	mu          sync.Mutex
+	running     bool
 
 	// Configuration from external configs
 	containerImage string
@@ -74,6 +75,7 @@ func NewPoolManager(
 		checkpointPath: checkpointPath,
 		logger:         logger.With("component", "pool"),
 		metrics:        m,
+		replenishCh:    make(chan struct{}, 1), // Buffer of 1 for non-blocking send
 	}
 }
 
@@ -95,15 +97,19 @@ func (m *PoolManager) Acquire(ctx context.Context) (*domain.Instance, error) {
 		instance.ExpiresAt = &expiresAt
 	}
 
-	// Add route to proxy
+	// Add route to proxy - FAIL if this fails, as instance won't be accessible
 	route := proxy.Route{
 		Hostname:    instance.Hostname,
 		UpstreamURL: fmt.Sprintf("http://localhost:%d", instance.Port),
 		InstanceID:  instance.ID,
 	}
 	if err := m.proxy.AddRoute(ctx, route); err != nil {
-		// Log but don't fail - instance can still be used directly
-		m.logger.Warn("Failed to add route for instance", "instanceID", instance.ID, "error", err)
+		m.logger.Error("Failed to add route for instance, releasing", "instanceID", instance.ID, "error", err)
+		// Cleanup: release the instance since it's unusable without a route
+		if releaseErr := m.Release(ctx, instance.ID); releaseErr != nil {
+			m.logger.Error("Failed to release instance after route failure", "instanceID", instance.ID, "error", releaseErr)
+		}
+		return nil, fmt.Errorf("%w: %v", domain.ErrRouteCreationFailed, err)
 	}
 
 	// Increment acquisition counter
@@ -111,14 +117,13 @@ func (m *PoolManager) Acquire(ctx context.Context) (*domain.Instance, error) {
 		m.logger.Warn("Failed to increment counter", "error", err)
 	}
 
-	// Trigger async replenishment check
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := m.TriggerReplenish(ctx); err != nil {
-			m.logger.Warn("Replenishment check failed", "error", err)
-		}
-	}()
+	// Trigger async replenishment check (non-blocking)
+	select {
+	case m.replenishCh <- struct{}{}:
+		// Trigger sent to consumer goroutine
+	default:
+		// Already a trigger pending, skip to avoid goroutine accumulation
+	}
 
 	return instance, nil
 }
@@ -242,6 +247,7 @@ func (m *PoolManager) TriggerReplenish(ctx context.Context) error {
 }
 
 // replenishLoop is the background loop that checks pool levels.
+// It handles both periodic replenishment (ticker) and on-demand triggers (replenishCh).
 func (m *PoolManager) replenishLoop(ctx context.Context) {
 	defer close(m.doneCh)
 
@@ -259,6 +265,13 @@ func (m *PoolManager) replenishLoop(ctx context.Context) {
 			return
 		case <-ctx.Done():
 			return
+		case <-m.replenishCh:
+			// On-demand trigger from Acquire() - bounded, no goroutine leak
+			triggerCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := m.TriggerReplenish(triggerCtx); err != nil {
+				m.logger.Warn("Triggered replenishment failed", "error", err)
+			}
+			cancel()
 		case <-ticker.C:
 			if err := m.TriggerReplenish(ctx); err != nil {
 				m.logger.Warn("Replenishment check failed", "error", err)
