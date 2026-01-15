@@ -2,7 +2,17 @@
 
 Instant-provisioning system for PrestaShop e-commerce trial instances. Achieves sub-500ms perceived startup using warm pool architecture with pre-warmed containerized instances.
 
-**Status:** Phase 1 complete - core infrastructure working, ready for integration testing.
+**Status:** v1.0.0 - Production ready with authentication, security hardening, and full test coverage.
+
+## Features
+
+- **Instant provisioning** - Sub-500ms instance acquisition from warm pool
+- **API key authentication** - Secure access with `X-API-Key` header
+- **Request tracing** - `X-Request-ID` header for distributed tracing
+- **Rate limiting** - Configurable hourly/daily limits per IP
+- **Prometheus metrics** - Full observability at `/metrics`
+- **Graceful shutdown** - Proper cleanup of all resources
+- **Security hardened** - Localhost-only bindings, trusted proxy config
 
 ## Quick Start
 
@@ -38,6 +48,8 @@ HTTP API (Gin)
 
 ## API Endpoints
 
+All `/api/v1/*` endpoints require `X-API-Key` header when `API_KEY` is configured.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | /api/v1/demo/acquire | Get instance from pool (rate limited) |
@@ -46,14 +58,14 @@ HTTP API (Gin)
 | DELETE | /api/v1/demo/:id | Release instance |
 | GET | /api/v1/demo/:id/status | SSE TTL countdown |
 | GET | /api/v1/pool/stats | Pool statistics |
-| GET | /health | Health check |
+| GET | /health | Health check (public) |
 | GET | /metrics | Prometheus metrics |
 
 ## Tech Stack
 
 - **Go 1.25** with Gin 1.11 (HTTP framework)
 - **Valkey 8** (Redis-compatible state store)
-- **Docker** (container runtime, Podman+CRIU planned)
+- **Docker** (container runtime, Podman+CRIU supported)
 - **Caddy 2** (dynamic reverse proxy)
 - **MariaDB 10.11** (shared PrestaShop database)
 - **NATS JetStream** (async message queue)
@@ -61,22 +73,33 @@ HTTP API (Gin)
 ## Development
 
 ```bash
-make test              # Run all tests
+make test              # Run unit tests (79 tests)
 make test-coverage     # Generate coverage HTML report
 make lint              # Run golangci-lint
 make build             # Compile to build/demo-multiplexer
 make clean-all         # Full cleanup
+
+# Integration tests (requires infrastructure)
+VALKEY_TEST=1 go test ./internal/store/...
+go test -tags=e2e ./tests/integration/...
 ```
 
 ## Configuration
 
 See `.env.example` for all configuration options. Key settings:
 
-- `POOL_TARGET_SIZE` - Number of warm instances to maintain
-- `CONTAINER_MODE` - docker or podman
-- `BASE_DOMAIN` - Domain for instance URLs
-- `RATE_LIMIT_HOURLY` / `RATE_LIMIT_DAILY` - Rate limiting
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `API_KEY` | API authentication key | (disabled) |
+| `TRUSTED_PROXIES` | Comma-separated proxy IPs | 127.0.0.1 |
+| `POOL_TARGET_SIZE` | Warm instances to maintain | 10 |
+| `CONTAINER_MODE` | docker or podman | docker |
+| `BASE_DOMAIN` | Domain for instance URLs | localhost |
 
 ## Documentation
 
 See [CLAUDE.md](./CLAUDE.md) for detailed development instructions, package structure, and implementation details.
+
+## License
+
+MIT

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 PrestaShop Demo Multiplexer - An instant-provisioning system for PrestaShop e-commerce trial instances. Uses warm pool architecture to achieve sub-500ms perceived startup by pre-warming containerized instances and assigning them on-demand.
 
-**Status:** Phase 1 complete - core infrastructure working, ready for integration testing.
+**Status:** Phase 2 complete - production-ready with authentication, security hardening, and comprehensive test coverage.
 
 ## Build & Development Commands
 
@@ -103,19 +103,24 @@ HTTP API (Gin)
 
 ## API Endpoints
 
+All `/api/v1/*` and `/metrics` endpoints require `X-API-Key` header when `API_KEY` is configured.
+
 - `POST /api/v1/demo/acquire` - Get instance from pool (rate limited)
 - `GET /api/v1/demo/:id` - Instance details
 - `POST /api/v1/demo/:id/extend` - Extend TTL
 - `DELETE /api/v1/demo/:id` - Early release
 - `GET /api/v1/demo/:id/status` - SSE TTL countdown
 - `GET /api/v1/pool/stats` - Pool statistics
-- `GET /health` - Health check
+- `GET /health` - Health check (public)
 - `GET /metrics` - Prometheus metrics
+
+Response headers include `X-Request-ID` for distributed tracing.
 
 ## Configuration
 
 Environment variables loaded from `.env` (see `.env.example`):
 
+- **Security:** `API_KEY` (required for production), `TRUSTED_PROXIES` (comma-separated IPs)
 - **Pool:** `POOL_TARGET_SIZE`, `POOL_MIN_SIZE`, `POOL_MAX_SIZE`, `POOL_DEFAULT_TTL`
 - **Container:** `CONTAINER_MODE` (docker/podman), `CONTAINER_IMAGE`, `CONTAINER_PORT_RANGE_*`
 - **Proxy:** `CADDY_ADMIN_URL`, `BASE_DOMAIN`
