@@ -56,7 +56,7 @@ func TestDockerRuntime_RestoreFromCheckpoint_NotSupported(t *testing.T) {
 		CheckpointPath: "/some/path",
 		Name:           "test",
 		Hostname:       "test",
-		Port:           32000,
+		Port:           31000,
 	}
 
 	_, err := runtime.RestoreFromCheckpoint(ctx, opts)
@@ -75,7 +75,7 @@ func TestDockerRuntime_StartAndStop(t *testing.T) {
 		Image:    "nginx:alpine",
 		Name:     "demo-test-" + time.Now().Format("20060102150405"),
 		Hostname: "test-host",
-		Port:     32050,
+		Port:     31050,
 		DBPrefix: "test_",
 		Labels: map[string]string{
 			"app": "demo-multiplexer-test",
@@ -153,7 +153,7 @@ func TestDockerRuntime_HealthCheck(t *testing.T) {
 		Image:    "nginx:alpine",
 		Name:     "demo-health-test-" + time.Now().Format("20060102150405"),
 		Hostname: "health-test",
-		Port:     32051,
+		Port:     31051,
 		DBPrefix: "test_",
 	}
 
