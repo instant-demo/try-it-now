@@ -12,6 +12,10 @@ import (
 
 	"github.com/boss/demo-multiplexer/internal/api"
 	"github.com/boss/demo-multiplexer/internal/config"
+	"github.com/boss/demo-multiplexer/internal/container"
+	"github.com/boss/demo-multiplexer/internal/pool"
+	"github.com/boss/demo-multiplexer/internal/proxy"
+	"github.com/boss/demo-multiplexer/internal/store"
 )
 
 func main() {
@@ -19,8 +23,57 @@ func main() {
 
 	log.Printf("Starting Demo Multiplexer (mode=%s)", cfg.Container.Mode)
 
+	// Create Valkey repository
+	repo, err := store.NewValkeyRepository(&cfg.Store, &cfg.Container)
+	if err != nil {
+		log.Fatalf("Failed to connect to Valkey: %v", err)
+	}
+	defer repo.Close()
+
+	// Initialize ports in Valkey
+	ctx := context.Background()
+	if err := repo.InitializePorts(ctx); err != nil {
+		log.Fatalf("Failed to initialize ports: %v", err)
+	}
+
+	// Create container runtime
+	runtime, err := container.NewDockerRuntime(&cfg.Container, &cfg.PrestaShop, &cfg.Proxy)
+	if err != nil {
+		log.Fatalf("Failed to create Docker runtime: %v", err)
+	}
+	defer runtime.Close()
+
+	// Create Caddy route manager
+	proxyMgr := proxy.NewCaddyRouteManager(&cfg.Proxy)
+
+	// Create pool manager
+	poolCfg := pool.ManagerConfig{
+		TargetPoolSize:     cfg.Pool.TargetSize,
+		MinPoolSize:        cfg.Pool.MinSize,
+		MaxPoolSize:        cfg.Pool.MaxSize,
+		ReplenishThreshold: cfg.Pool.ReplenishThreshold,
+		ReplenishInterval:  cfg.Pool.ReplenishInterval,
+		DefaultTTL:         cfg.Pool.DefaultTTL,
+		MaxTTL:             cfg.Pool.MaxTTL,
+	}
+	poolMgr := pool.NewPoolManager(
+		poolCfg,
+		repo,
+		runtime,
+		proxyMgr,
+		cfg.Container.Image,
+		cfg.Container.Network,
+		cfg.Proxy.BaseDomain,
+	)
+
+	// Start pool replenisher
+	if err := poolMgr.StartReplenisher(ctx); err != nil {
+		log.Fatalf("Failed to start replenisher: %v", err)
+	}
+	defer poolMgr.StopReplenisher()
+
 	// Create API handler
-	handler := api.NewHandler(cfg)
+	handler := api.NewHandler(cfg, poolMgr, repo)
 
 	// Create HTTP server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -47,10 +100,10 @@ func main() {
 	log.Println("Shutting down server...")
 
 	// Graceful shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
