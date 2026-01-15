@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/boss/demo-multiplexer/internal/config"
 	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/boss/demo-multiplexer/pkg/logging"
 	"github.com/containers/podman/v5/pkg/bindings"
 	"github.com/containers/podman/v5/pkg/bindings/containers"
 	"github.com/containers/podman/v5/pkg/bindings/system"
@@ -32,10 +32,11 @@ type PodmanRuntime struct {
 	proxyCfg      *config.ProxyConfig
 	criuAvailable bool
 	criuVersion   string
+	logger        *logging.Logger
 }
 
 // NewPodmanRuntime creates a new Podman-based runtime with optional CRIU support.
-func NewPodmanRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfig, proxyCfg *config.ProxyConfig) (*PodmanRuntime, error) {
+func NewPodmanRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfig, proxyCfg *config.ProxyConfig, logger *logging.Logger) (*PodmanRuntime, error) {
 	// Establish connection to Podman socket
 	conn, err := bindings.NewConnection(context.Background(), cfg.PodmanSocketPath)
 	if err != nil {
@@ -47,6 +48,7 @@ func NewPodmanRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfi
 		cfg:      cfg,
 		psCfg:    psCfg,
 		proxyCfg: proxyCfg,
+		logger:   logger.With("component", "podman"),
 	}
 
 	// Check CRIU availability if enabled
@@ -64,14 +66,14 @@ func (r *PodmanRuntime) checkCRIUAvailability() {
 	// Get Podman system info via API
 	info, err := system.Info(r.conn, nil)
 	if err != nil {
-		log.Printf("Warning: Failed to get Podman info - CRIU disabled: %v", err)
+		r.logger.Warn("Failed to get Podman info - CRIU disabled", "error", err)
 		r.criuAvailable = false
 		return
 	}
 
 	// Check if Podman is running rootful (required for CRIU)
 	if info.Host.Security.Rootless {
-		log.Printf("Warning: Podman is rootless - CRIU checkpoint/restore disabled")
+		r.logger.Warn("Podman is rootless - CRIU checkpoint/restore disabled")
 		r.criuAvailable = false
 		return
 	}
@@ -79,7 +81,7 @@ func (r *PodmanRuntime) checkCRIUAvailability() {
 	// Check if OCI runtime has CRIU support compiled in
 	// crun reports "+CRIU" in version string when CRIU is available
 	if info.Host.OCIRuntime == nil || !strings.Contains(info.Host.OCIRuntime.Version, "+CRIU") {
-		log.Printf("Warning: OCI runtime does not have CRIU support - checkpoint/restore disabled")
+		r.logger.Warn("OCI runtime does not have CRIU support - checkpoint/restore disabled")
 		r.criuAvailable = false
 		return
 	}
@@ -89,13 +91,13 @@ func (r *PodmanRuntime) checkCRIUAvailability() {
 
 	// Check checkpoint file exists
 	if _, err := os.Stat(r.cfg.CheckpointPath); os.IsNotExist(err) {
-		log.Printf("Warning: Checkpoint file not found at %s - will use Start() fallback", r.cfg.CheckpointPath)
+		r.logger.Warn("Checkpoint file not found - will use Start() fallback", "path", r.cfg.CheckpointPath)
 		r.criuAvailable = false
 		return
 	}
 
 	r.criuAvailable = true
-	log.Printf("CRIU available via %s - checkpoint/restore enabled", info.Host.OCIRuntime.Name)
+	r.logger.Info("CRIU available - checkpoint/restore enabled", "runtime", info.Host.OCIRuntime.Name)
 }
 
 // extractVersion extracts version string from CRIU output.
@@ -245,7 +247,7 @@ func (r *PodmanRuntime) Stop(ctx context.Context, containerID string) error {
 	if err := containers.Stop(r.conn, containerID, stopOpts); err != nil {
 		// Log but continue to remove
 		if !strings.Contains(err.Error(), "no such container") {
-			log.Printf("Warning: failed to stop container %s: %v", containerID, err)
+			r.logger.Warn("Failed to stop container", "containerID", containerID, "error", err)
 		}
 	}
 
@@ -324,7 +326,7 @@ func (r *PodmanRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 	// TCP check first (faster, catches connection refused quickly)
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
-		log.Printf("Health check TCP failed for %s: %v", containerID[:12], err)
+		r.logger.Debug("Health check TCP failed", "containerID", containerID[:12], "error", err)
 		return false, nil
 	}
 	conn.Close()
@@ -339,7 +341,7 @@ func (r *PodmanRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("Health check HTTP failed for %s: %v", containerID[:12], err)
+		r.logger.Debug("Health check HTTP failed", "containerID", containerID[:12], "error", err)
 		return false, nil
 	}
 	defer func() {
@@ -349,7 +351,7 @@ func (r *PodmanRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 
 	healthy := resp.StatusCode >= 200 && resp.StatusCode < 500
 	if !healthy {
-		log.Printf("Health check HTTP status %d for %s", resp.StatusCode, containerID[:12])
+		r.logger.Debug("Health check HTTP unexpected status", "containerID", containerID[:12], "status", resp.StatusCode)
 	}
 	return healthy, nil
 }

@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/boss/demo-multiplexer/internal/config"
+	"github.com/boss/demo-multiplexer/pkg/logging"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -129,6 +129,7 @@ type NATSConsumer struct {
 	provisionHandler ProvisionHandler
 	cleanupHandler   CleanupHandler
 	cfg              *config.QueueConfig
+	logger           *logging.Logger
 
 	stopCh  chan struct{}
 	doneCh  chan struct{}
@@ -145,6 +146,7 @@ func NewNATSConsumer(
 	cfg *config.QueueConfig,
 	provisionHandler ProvisionHandler,
 	cleanupHandler CleanupHandler,
+	logger *logging.Logger,
 ) (*NATSConsumer, error) {
 	// Connect to NATS
 	nc, err := nats.Connect(cfg.NATSURL,
@@ -180,6 +182,7 @@ func NewNATSConsumer(
 		provisionHandler: provisionHandler,
 		cleanupHandler:   cleanupHandler,
 		cfg:              cfg,
+		logger:           logger.With("component", "nats-consumer"),
 	}, nil
 }
 
@@ -252,16 +255,15 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 		close(c.doneCh)
 	}()
 
-	log.Printf("NATS consumer started with %d provision workers and %d cleanup workers",
-		c.cfg.WorkerCount, c.cfg.WorkerCount)
+	c.logger.Info("NATS consumer started", "provisionWorkers", c.cfg.WorkerCount, "cleanupWorkers", c.cfg.WorkerCount)
 
 	return nil
 }
 
 // runProvisionWorker processes provision tasks.
 func (c *NATSConsumer) runProvisionWorker(cons jetstream.Consumer, workerID int) {
-	log.Printf("Provision worker %d started", workerID)
-	defer log.Printf("Provision worker %d stopped", workerID)
+	c.logger.Info("Provision worker started", "workerID", workerID)
+	defer c.logger.Info("Provision worker stopped", "workerID", workerID)
 
 	for {
 		select {
@@ -274,7 +276,7 @@ func (c *NATSConsumer) runProvisionWorker(cons jetstream.Consumer, workerID int)
 		msgs, err := cons.Fetch(1, jetstream.FetchMaxWait(5*time.Second))
 		if err != nil {
 			if err != context.DeadlineExceeded {
-				log.Printf("Provision worker %d fetch error: %v", workerID, err)
+				c.logger.Warn("Provision worker fetch error", "workerID", workerID, "error", err)
 			}
 			continue
 		}
@@ -284,7 +286,7 @@ func (c *NATSConsumer) runProvisionWorker(cons jetstream.Consumer, workerID int)
 		}
 
 		if msgs.Error() != nil && msgs.Error() != context.DeadlineExceeded {
-			log.Printf("Provision worker %d messages error: %v", workerID, msgs.Error())
+			c.logger.Warn("Provision worker messages error", "workerID", workerID, "error", msgs.Error())
 		}
 	}
 }
@@ -292,30 +294,30 @@ func (c *NATSConsumer) runProvisionWorker(cons jetstream.Consumer, workerID int)
 func (c *NATSConsumer) processProvisionMessage(msg jetstream.Msg, workerID int) {
 	var task ProvisionTask
 	if err := json.Unmarshal(msg.Data(), &task); err != nil {
-		log.Printf("Worker %d: failed to unmarshal provision task: %v", workerID, err)
+		c.logger.Warn("Failed to unmarshal provision task", "workerID", workerID, "error", err)
 		msg.Term() // Terminate - don't redeliver malformed messages
 		return
 	}
 
-	log.Printf("Worker %d processing provision task: %s", workerID, task.TaskID)
+	c.logger.Info("Processing provision task", "workerID", workerID, "taskID", task.TaskID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := c.provisionHandler(ctx, task); err != nil {
-		log.Printf("Worker %d: provision task %s failed: %v", workerID, task.TaskID, err)
+		c.logger.Warn("Provision task failed", "workerID", workerID, "taskID", task.TaskID, "error", err)
 		msg.Nak() // Negative ack - will be redelivered
 		return
 	}
 
 	msg.Ack()
-	log.Printf("Worker %d completed provision task: %s", workerID, task.TaskID)
+	c.logger.Info("Completed provision task", "workerID", workerID, "taskID", task.TaskID)
 }
 
 // runCleanupWorker processes cleanup tasks.
 func (c *NATSConsumer) runCleanupWorker(cons jetstream.Consumer, workerID int) {
-	log.Printf("Cleanup worker %d started", workerID)
-	defer log.Printf("Cleanup worker %d stopped", workerID)
+	c.logger.Info("Cleanup worker started", "workerID", workerID)
+	defer c.logger.Info("Cleanup worker stopped", "workerID", workerID)
 
 	for {
 		select {
@@ -328,7 +330,7 @@ func (c *NATSConsumer) runCleanupWorker(cons jetstream.Consumer, workerID int) {
 		msgs, err := cons.Fetch(1, jetstream.FetchMaxWait(5*time.Second))
 		if err != nil {
 			if err != context.DeadlineExceeded {
-				log.Printf("Cleanup worker %d fetch error: %v", workerID, err)
+				c.logger.Warn("Cleanup worker fetch error", "workerID", workerID, "error", err)
 			}
 			continue
 		}
@@ -338,7 +340,7 @@ func (c *NATSConsumer) runCleanupWorker(cons jetstream.Consumer, workerID int) {
 		}
 
 		if msgs.Error() != nil && msgs.Error() != context.DeadlineExceeded {
-			log.Printf("Cleanup worker %d messages error: %v", workerID, msgs.Error())
+			c.logger.Warn("Cleanup worker messages error", "workerID", workerID, "error", msgs.Error())
 		}
 	}
 }
@@ -346,24 +348,24 @@ func (c *NATSConsumer) runCleanupWorker(cons jetstream.Consumer, workerID int) {
 func (c *NATSConsumer) processCleanupMessage(msg jetstream.Msg, workerID int) {
 	var task CleanupTask
 	if err := json.Unmarshal(msg.Data(), &task); err != nil {
-		log.Printf("Worker %d: failed to unmarshal cleanup task: %v", workerID, err)
+		c.logger.Warn("Failed to unmarshal cleanup task", "workerID", workerID, "error", err)
 		msg.Term()
 		return
 	}
 
-	log.Printf("Worker %d processing cleanup task: %s (instance: %s)", workerID, task.TaskID, task.InstanceID)
+	c.logger.Info("Processing cleanup task", "workerID", workerID, "taskID", task.TaskID, "instanceID", task.InstanceID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	if err := c.cleanupHandler(ctx, task); err != nil {
-		log.Printf("Worker %d: cleanup task %s failed: %v", workerID, task.TaskID, err)
+		c.logger.Warn("Cleanup task failed", "workerID", workerID, "taskID", task.TaskID, "error", err)
 		msg.Nak()
 		return
 	}
 
 	msg.Ack()
-	log.Printf("Worker %d completed cleanup task: %s", workerID, task.TaskID)
+	c.logger.Info("Completed cleanup task", "workerID", workerID, "taskID", task.TaskID)
 }
 
 // Stop gracefully stops the consumer.
@@ -380,9 +382,9 @@ func (c *NATSConsumer) Stop(ctx context.Context) error {
 	// Wait for workers to finish or context timeout
 	select {
 	case <-c.doneCh:
-		log.Println("All NATS consumer workers stopped")
+		c.logger.Info("All NATS consumer workers stopped")
 	case <-ctx.Done():
-		log.Println("NATS consumer stop timed out")
+		c.logger.Warn("NATS consumer stop timed out")
 	}
 
 	// Drain connection

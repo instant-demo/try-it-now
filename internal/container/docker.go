@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/boss/demo-multiplexer/internal/config"
 	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/boss/demo-multiplexer/pkg/logging"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -34,10 +34,11 @@ type DockerRuntime struct {
 	psCfg     *config.PrestaShopConfig
 	proxyCfg  *config.ProxyConfig
 	networkID string
+	logger    *logging.Logger
 }
 
 // NewDockerRuntime creates a new Docker-based runtime.
-func NewDockerRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfig, proxyCfg *config.ProxyConfig) (*DockerRuntime, error) {
+func NewDockerRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfig, proxyCfg *config.ProxyConfig, logger *logging.Logger) (*DockerRuntime, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker client: %w", err)
@@ -48,6 +49,7 @@ func NewDockerRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfi
 		cfg:      cfg,
 		psCfg:    psCfg,
 		proxyCfg: proxyCfg,
+		logger:   logger.With("component", "docker"),
 	}, nil
 }
 
@@ -227,7 +229,7 @@ func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		// Log but don't fail - connection refused is expected during startup
-		log.Printf("Health check TCP failed for %s: %v", containerID[:12], err)
+		r.logger.Debug("Health check TCP failed", "containerID", containerID[:12], "error", err)
 		return false, nil
 	}
 	conn.Close()
@@ -245,7 +247,7 @@ func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		log.Printf("Health check HTTP failed for %s: %v", containerID[:12], err)
+		r.logger.Debug("Health check HTTP failed", "containerID", containerID[:12], "error", err)
 		return false, nil
 	}
 	defer func() {
@@ -256,7 +258,7 @@ func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 	// Any response (even 302 redirect) means the container is healthy
 	healthy := resp.StatusCode >= 200 && resp.StatusCode < 500
 	if !healthy {
-		log.Printf("Health check HTTP status %d for %s", resp.StatusCode, containerID[:12])
+		r.logger.Debug("Health check HTTP unexpected status", "containerID", containerID[:12], "status", resp.StatusCode)
 	}
 	return healthy, nil
 }

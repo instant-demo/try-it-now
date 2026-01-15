@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/boss/demo-multiplexer/internal/config"
+	"github.com/boss/demo-multiplexer/pkg/logging"
 )
 
 // skipIfNoNATS skips the test if NATS is not available.
@@ -124,7 +125,7 @@ func TestNATSConsumer_RoundTrip(t *testing.T) {
 	}
 
 	// Create consumer
-	consumer, err := NewNATSConsumer(cfg, provisionHandler, cleanupHandler)
+	consumer, err := NewNATSConsumer(cfg, provisionHandler, cleanupHandler, logging.Nop())
 	if err != nil {
 		t.Fatalf("NewNATSConsumer() error = %v", err)
 	}
@@ -197,7 +198,7 @@ func TestNATSConsumer_GracefulShutdown(t *testing.T) {
 		return nil
 	}
 
-	consumer, err := NewNATSConsumer(cfg, handler, noopCleanup)
+	consumer, err := NewNATSConsumer(cfg, handler, noopCleanup, logging.Nop())
 	if err != nil {
 		t.Fatalf("NewNATSConsumer() error = %v", err)
 	}

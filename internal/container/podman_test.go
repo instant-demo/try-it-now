@@ -8,6 +8,7 @@ import (
 
 	"github.com/boss/demo-multiplexer/internal/config"
 	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/boss/demo-multiplexer/pkg/logging"
 )
 
 // getTestSocketPath returns the Podman socket path for testing.
@@ -50,7 +51,7 @@ func skipIfNoPodman(t *testing.T) *PodmanRuntime {
 		BaseDomain:    "localhost",
 	}
 
-	runtime, err := NewPodmanRuntime(containerCfg, psCfg, proxyCfg)
+	runtime, err := NewPodmanRuntime(containerCfg, psCfg, proxyCfg, logging.Nop())
 	if err != nil {
 		t.Skipf("Failed to connect to Podman: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestPodmanRuntime_CRIUAvailability(t *testing.T) {
 		t.Skip("Skipping Podman integration test. Set PODMAN_TEST=1 to run.")
 	}
 
-	runtime, err := NewPodmanRuntime(containerCfg, psCfg, proxyCfg)
+	runtime, err := NewPodmanRuntime(containerCfg, psCfg, proxyCfg, logging.Nop())
 	if err != nil {
 		t.Skipf("Failed to connect to Podman: %v", err)
 	}

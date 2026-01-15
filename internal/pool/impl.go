@@ -3,7 +3,6 @@ package pool
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/boss/demo-multiplexer/internal/domain"
 	"github.com/boss/demo-multiplexer/internal/proxy"
 	"github.com/boss/demo-multiplexer/internal/store"
+	"github.com/boss/demo-multiplexer/pkg/logging"
 )
 
 // instanceCounter provides unique suffixes for hostname/DB prefix generation.
@@ -29,6 +29,7 @@ type PoolManager struct {
 	repo     store.Repository
 	runtime  container.Runtime
 	proxy    proxy.RouteManager
+	logger   *logging.Logger
 
 	stopCh   chan struct{}
 	doneCh   chan struct{}
@@ -52,6 +53,7 @@ func NewPoolManager(
 	networkID string,
 	baseDomain string,
 	checkpointPath string,
+	logger *logging.Logger,
 ) *PoolManager {
 	return &PoolManager{
 		cfg:            cfg,
@@ -62,6 +64,7 @@ func NewPoolManager(
 		networkID:      networkID,
 		baseDomain:     baseDomain,
 		checkpointPath: checkpointPath,
+		logger:         logger.With("component", "pool"),
 	}
 }
 
@@ -76,7 +79,7 @@ func (m *PoolManager) Acquire(ctx context.Context) (*domain.Instance, error) {
 	// Set TTL
 	if err := m.repo.SetInstanceTTL(ctx, instance.ID, m.cfg.DefaultTTL); err != nil {
 		// Log but don't fail - instance is already assigned
-		log.Printf("Warning: failed to set TTL for instance %s: %v", instance.ID, err)
+		m.logger.Warn("Failed to set TTL for instance", "instanceID", instance.ID, "error", err)
 	} else {
 		// Update in-memory instance to reflect the TTL we just set
 		expiresAt := time.Now().Add(m.cfg.DefaultTTL)
@@ -91,12 +94,12 @@ func (m *PoolManager) Acquire(ctx context.Context) (*domain.Instance, error) {
 	}
 	if err := m.proxy.AddRoute(ctx, route); err != nil {
 		// Log but don't fail - instance can still be used directly
-		log.Printf("Warning: failed to add route for instance %s: %v", instance.ID, err)
+		m.logger.Warn("Failed to add route for instance", "instanceID", instance.ID, "error", err)
 	}
 
 	// Increment acquisition counter
 	if err := m.repo.IncrementCounter(ctx, "acquisitions"); err != nil {
-		log.Printf("Warning: failed to increment counter: %v", err)
+		m.logger.Warn("Failed to increment counter", "error", err)
 	}
 
 	// Trigger async replenishment check
@@ -104,7 +107,7 @@ func (m *PoolManager) Acquire(ctx context.Context) (*domain.Instance, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := m.TriggerReplenish(ctx); err != nil {
-			log.Printf("Warning: replenishment check failed: %v", err)
+			m.logger.Warn("Replenishment check failed", "error", err)
 		}
 	}()
 
@@ -120,17 +123,17 @@ func (m *PoolManager) Release(ctx context.Context, instanceID string) error {
 
 	// Remove route from proxy
 	if err := m.proxy.RemoveRoute(ctx, instance.Hostname); err != nil {
-		log.Printf("Warning: failed to remove route for instance %s: %v", instanceID, err)
+		m.logger.Warn("Failed to remove route for instance", "instanceID", instanceID, "error", err)
 	}
 
 	// Stop container
 	if err := m.runtime.Stop(ctx, instance.ContainerID); err != nil {
-		log.Printf("Warning: failed to stop container for instance %s: %v", instanceID, err)
+		m.logger.Warn("Failed to stop container for instance", "instanceID", instanceID, "error", err)
 	}
 
 	// Release port
 	if err := m.repo.ReleasePort(ctx, instance.Port); err != nil {
-		log.Printf("Warning: failed to release port %d: %v", instance.Port, err)
+		m.logger.Warn("Failed to release port", "port", instance.Port, "error", err)
 	}
 
 	// Delete instance from store
@@ -200,13 +203,12 @@ func (m *PoolManager) TriggerReplenish(ctx context.Context) error {
 		return nil
 	}
 
-	log.Printf("Replenishing pool: %d instances needed (ready=%d, target=%d)",
-		needed, stats.Ready, stats.Target)
+	m.logger.Info("Replenishing pool", "needed", needed, "ready", stats.Ready, "target", stats.Target)
 
 	// Provision instances in parallel (but not more than capacity allows)
 	for i := 0; i < needed; i++ {
 		if err := m.provisionInstance(ctx); err != nil {
-			log.Printf("Failed to provision instance: %v", err)
+			m.logger.Warn("Failed to provision instance", "error", err)
 			// Continue trying to provision others
 		}
 	}
@@ -223,7 +225,7 @@ func (m *PoolManager) replenishLoop(ctx context.Context) {
 
 	// Initial replenishment
 	if err := m.TriggerReplenish(ctx); err != nil {
-		log.Printf("Initial replenishment failed: %v", err)
+		m.logger.Warn("Initial replenishment failed", "error", err)
 	}
 
 	for {
@@ -234,12 +236,12 @@ func (m *PoolManager) replenishLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if err := m.TriggerReplenish(ctx); err != nil {
-				log.Printf("Replenishment check failed: %v", err)
+				m.logger.Warn("Replenishment check failed", "error", err)
 			}
 
 			// Also clean up expired instances
 			if err := m.cleanupExpired(ctx); err != nil {
-				log.Printf("Cleanup expired failed: %v", err)
+				m.logger.Warn("Cleanup expired failed", "error", err)
 			}
 		}
 	}
@@ -277,10 +279,10 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 		instance, err = m.runtime.RestoreFromCheckpoint(ctx, restoreOpts)
 		if err != nil {
 			// Log and fall back to cold start
-			log.Printf("CRIU restore failed, falling back to Start(): %v", err)
+			m.logger.Warn("CRIU restore failed, falling back to Start()", "error", err)
 			instance = nil // Ensure we fall through to Start()
 		} else {
-			log.Printf("Restored instance from checkpoint: %s (port %d)", instance.ID, port)
+			m.logger.Info("Restored instance from checkpoint", "instanceID", instance.ID, "port", port)
 		}
 	}
 
@@ -329,7 +331,7 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 		return fmt.Errorf("failed to add to pool: %w", err)
 	}
 
-	log.Printf("Provisioned new instance: %s (port %d)", instance.ID, port)
+	m.logger.Info("Provisioned new instance", "instanceID", instance.ID, "port", port)
 	return nil
 }
 
@@ -355,11 +357,11 @@ func (m *PoolManager) waitForReady(ctx context.Context, instance *domain.Instanc
 			attempt++
 			healthy, err := m.runtime.HealthCheck(ctx, instance.ContainerID)
 			if err != nil {
-				log.Printf("Health check error for %s (attempt %d): %v", instance.ID, attempt, err)
+				m.logger.Warn("Health check error", "instanceID", instance.ID, "attempt", attempt, "error", err)
 				continue
 			}
 			if healthy {
-				log.Printf("Container %s ready after %d attempts", instance.ID, attempt)
+				m.logger.Info("Container ready", "instanceID", instance.ID, "attempts", attempt)
 				return nil
 			}
 		}
@@ -374,9 +376,9 @@ func (m *PoolManager) cleanupExpired(ctx context.Context) error {
 	}
 
 	for _, instance := range expired {
-		log.Printf("Cleaning up expired instance: %s", instance.ID)
+		m.logger.Info("Cleaning up expired instance", "instanceID", instance.ID)
 		if err := m.Release(ctx, instance.ID); err != nil {
-			log.Printf("Failed to release expired instance %s: %v", instance.ID, err)
+			m.logger.Warn("Failed to release expired instance", "instanceID", instance.ID, "error", err)
 		}
 	}
 

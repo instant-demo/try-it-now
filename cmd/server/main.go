@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +16,7 @@ import (
 	"github.com/boss/demo-multiplexer/internal/proxy"
 	"github.com/boss/demo-multiplexer/internal/queue"
 	"github.com/boss/demo-multiplexer/internal/store"
+	"github.com/boss/demo-multiplexer/pkg/logging"
 	"github.com/joho/godotenv"
 )
 
@@ -26,46 +26,50 @@ func main() {
 
 	cfg := config.Load()
 
-	log.Printf("Starting Demo Multiplexer (mode=%s)", cfg.Container.Mode)
+	// Initialize structured logger
+	logger := logging.New(cfg.Log.Level, cfg.Log.Format)
+
+	logger.Info("Starting Demo Multiplexer", "mode", cfg.Container.Mode)
 
 	// Create Valkey repository
 	repo, err := store.NewValkeyRepository(&cfg.Store, &cfg.Container)
 	if err != nil {
-		log.Fatalf("Failed to connect to Valkey: %v", err)
+		logger.Fatal("Failed to connect to Valkey", "error", err)
 	}
 	defer repo.Close()
 
 	// Initialize ports in Valkey
 	ctx := context.Background()
 	if err := repo.InitializePorts(ctx); err != nil {
-		log.Fatalf("Failed to initialize ports: %v", err)
+		logger.Fatal("Failed to initialize ports", "error", err)
 	}
 
 	// Create NATS Publisher
 	publisher, err := queue.NewNATSPublisher(&cfg.Queue)
 	if err != nil {
-		log.Fatalf("Failed to create NATS publisher: %v", err)
+		logger.Fatal("Failed to create NATS publisher", "error", err)
 	}
 	defer publisher.Close()
-	log.Println("Connected to NATS JetStream")
+	logger.Info("Connected to NATS JetStream")
 
 	// Create NATS Consumer with stub handlers
 	// TODO: Replace with real handlers that call poolMgr methods
+	queueLogger := logger.With("component", "queue")
 	provisionHandler := func(ctx context.Context, task queue.ProvisionTask) error {
-		log.Printf("Provision handler: task=%s priority=%d", task.TaskID, task.Priority)
+		queueLogger.Debug("Provision handler called", "taskID", task.TaskID, "priority", task.Priority)
 		return nil
 	}
 	cleanupHandler := func(ctx context.Context, task queue.CleanupTask) error {
-		log.Printf("Cleanup handler: instance=%s container=%s", task.InstanceID, task.ContainerID)
+		queueLogger.Debug("Cleanup handler called", "instanceID", task.InstanceID, "containerID", task.ContainerID)
 		return nil
 	}
 
-	consumer, err := queue.NewNATSConsumer(&cfg.Queue, provisionHandler, cleanupHandler)
+	consumer, err := queue.NewNATSConsumer(&cfg.Queue, provisionHandler, cleanupHandler, logger)
 	if err != nil {
-		log.Fatalf("Failed to create NATS consumer: %v", err)
+		logger.Fatal("Failed to create NATS consumer", "error", err)
 	}
 	if err := consumer.Start(ctx); err != nil {
-		log.Fatalf("Failed to start NATS consumer: %v", err)
+		logger.Fatal("Failed to start NATS consumer", "error", err)
 	}
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -79,19 +83,19 @@ func main() {
 
 	switch cfg.Container.Mode {
 	case "podman":
-		podmanRuntime, err := container.NewPodmanRuntime(&cfg.Container, &cfg.PrestaShop, &cfg.Proxy)
+		podmanRuntime, err := container.NewPodmanRuntime(&cfg.Container, &cfg.PrestaShop, &cfg.Proxy, logger)
 		if err != nil {
-			log.Fatalf("Failed to create Podman runtime: %v", err)
+			logger.Fatal("Failed to create Podman runtime", "error", err)
 		}
 		runtime = podmanRuntime
 		runtimeCloser = podmanRuntime.Close
-		log.Printf("CRIU checkpoint/restore available: %v", podmanRuntime.CRIUAvailable())
+		logger.Info("CRIU checkpoint/restore status", "available", podmanRuntime.CRIUAvailable())
 	case "docker":
 		fallthrough
 	default:
-		dockerRuntime, err := container.NewDockerRuntime(&cfg.Container, &cfg.PrestaShop, &cfg.Proxy)
+		dockerRuntime, err := container.NewDockerRuntime(&cfg.Container, &cfg.PrestaShop, &cfg.Proxy, logger)
 		if err != nil {
-			log.Fatalf("Failed to create Docker runtime: %v", err)
+			logger.Fatal("Failed to create Docker runtime", "error", err)
 		}
 		runtime = dockerRuntime
 		runtimeCloser = dockerRuntime.Close
@@ -120,11 +124,12 @@ func main() {
 		cfg.Container.Network,
 		cfg.Proxy.BaseDomain,
 		cfg.Container.CheckpointPath,
+		logger,
 	)
 
 	// Start pool replenisher
 	if err := poolMgr.StartReplenisher(ctx); err != nil {
-		log.Fatalf("Failed to start replenisher: %v", err)
+		logger.Fatal("Failed to start replenisher", "error", err)
 	}
 	defer poolMgr.StopReplenisher()
 
@@ -142,9 +147,10 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		log.Printf("Server listening on %s", addr)
+		logger.Info("Server listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %v", err)
+			logger.Error("Server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -153,15 +159,15 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down server...")
+	logger.Info("Shutting down server")
 
 	// Graceful shutdown with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		logger.Fatal("Server forced to shutdown", "error", err)
 	}
 
-	log.Println("Server stopped")
+	logger.Info("Server stopped")
 }

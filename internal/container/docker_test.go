@@ -8,6 +8,7 @@ import (
 
 	"github.com/boss/demo-multiplexer/internal/config"
 	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/boss/demo-multiplexer/pkg/logging"
 )
 
 // skipIfNoDocker skips the test if Docker is not available.
@@ -39,7 +40,7 @@ func skipIfNoDocker(t *testing.T) *DockerRuntime {
 		BaseDomain:    "localhost",
 	}
 
-	runtime, err := NewDockerRuntime(containerCfg, psCfg, proxyCfg)
+	runtime, err := NewDockerRuntime(containerCfg, psCfg, proxyCfg, logging.Nop())
 	if err != nil {
 		t.Skipf("Failed to connect to Docker: %v", err)
 	}

@@ -8,6 +8,7 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
+	Log        LogConfig
 	Server     ServerConfig
 	Pool       PoolConfig
 	Container  ContainerConfig
@@ -16,6 +17,11 @@ type Config struct {
 	Queue      QueueConfig
 	PrestaShop PrestaShopConfig
 	RateLimit  RateLimitConfig
+}
+
+type LogConfig struct {
+	Level  string // debug, info, warn, error
+	Format string // json, text
 }
 
 type ServerConfig struct {
@@ -82,6 +88,10 @@ type RateLimitConfig struct {
 // Load loads configuration from environment variables with sensible defaults.
 func Load() *Config {
 	return &Config{
+		Log: LogConfig{
+			Level:  getEnv("LOG_LEVEL", "info"),
+			Format: getEnv("LOG_FORMAT", "json"),
+		},
 		Server: ServerConfig{
 			Host:         getEnv("SERVER_HOST", "0.0.0.0"),
 			Port:         getEnvInt("SERVER_PORT", 8080),
