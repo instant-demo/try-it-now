@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -159,5 +160,128 @@ func TestAPIKeyAuth_TimingAttackResistance(t *testing.T) {
 				t.Errorf("expected status %d, got %d", tc.wantCode, w.Code)
 			}
 		})
+	}
+}
+
+// UUID pattern for validating generated request IDs
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func TestRequestID_GeneratesUUID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var capturedID string
+	router := gin.New()
+	router.Use(RequestID())
+	router.GET("/test", func(c *gin.Context) {
+		capturedID = GetRequestID(c)
+		c.String(http.StatusOK, "ok")
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/test", nil)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	// Check response header
+	responseID := w.Header().Get(RequestIDHeader)
+	if responseID == "" {
+		t.Error("expected X-Request-ID header in response")
+	}
+	if !uuidPattern.MatchString(responseID) {
+		t.Errorf("expected UUID format, got %q", responseID)
+	}
+
+	// Check context value matches header
+	if capturedID != responseID {
+		t.Errorf("context ID %q does not match header ID %q", capturedID, responseID)
+	}
+}
+
+func TestRequestID_UsesClientProvidedID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	clientID := "client-provided-request-id-123"
+	var capturedID string
+
+	router := gin.New()
+	router.Use(RequestID())
+	router.GET("/test", func(c *gin.Context) {
+		capturedID = GetRequestID(c)
+		c.String(http.StatusOK, "ok")
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/test", nil)
+	req.Header.Set(RequestIDHeader, clientID)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	// Check response header echoes client ID
+	responseID := w.Header().Get(RequestIDHeader)
+	if responseID != clientID {
+		t.Errorf("expected client ID %q in response, got %q", clientID, responseID)
+	}
+
+	// Check context value matches
+	if capturedID != clientID {
+		t.Errorf("expected context ID %q, got %q", clientID, capturedID)
+	}
+}
+
+func TestRequestID_UniquePerRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var ids []string
+	router := gin.New()
+	router.Use(RequestID())
+	router.GET("/test", func(c *gin.Context) {
+		ids = append(ids, GetRequestID(c))
+		c.String(http.StatusOK, "ok")
+	})
+
+	// Make multiple requests
+	for i := 0; i < 3; i++ {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest("GET", "/test", nil)
+		router.ServeHTTP(w, req)
+	}
+
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 IDs, got %d", len(ids))
+	}
+
+	// Verify all IDs are unique
+	seen := make(map[string]bool)
+	for _, id := range ids {
+		if seen[id] {
+			t.Errorf("duplicate request ID: %q", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestGetRequestID_NoMiddleware(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var capturedID string
+	router := gin.New()
+	// No RequestID middleware
+	router.GET("/test", func(c *gin.Context) {
+		capturedID = GetRequestID(c)
+		c.String(http.StatusOK, "ok")
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/test", nil)
+	router.ServeHTTP(w, req)
+
+	if capturedID != "" {
+		t.Errorf("expected empty string when no middleware, got %q", capturedID)
 	}
 }

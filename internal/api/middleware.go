@@ -5,6 +5,13 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+)
+
+// Constants for request ID middleware
+const (
+	RequestIDHeader = "X-Request-ID"
+	RequestIDKey    = "request_id"
 )
 
 // APIKeyAuth returns a middleware that validates API key authentication.
@@ -39,4 +46,32 @@ func APIKeyAuth(apiKey string) gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// RequestID middleware adds a unique request ID to each request for distributed tracing.
+// If the client provides an X-Request-ID header, it is reused. Otherwise, a new UUID is generated.
+// The request ID is stored in the gin context and returned in the response header.
+func RequestID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Use existing header if provided, otherwise generate
+		requestID := c.GetHeader(RequestIDHeader)
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+
+		// Store in context and set response header
+		c.Set(RequestIDKey, requestID)
+		c.Header(RequestIDHeader, requestID)
+
+		c.Next()
+	}
+}
+
+// GetRequestID extracts the request ID from a gin context.
+// Returns an empty string if no request ID is present.
+func GetRequestID(c *gin.Context) string {
+	if id, exists := c.Get(RequestIDKey); exists {
+		return id.(string)
+	}
+	return ""
 }
