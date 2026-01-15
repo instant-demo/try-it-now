@@ -186,19 +186,28 @@ func main() {
 		WriteTimeout: cfg.Server.WriteTimeout,
 	}
 
+	// Channel to receive server errors from goroutine
+	serverErrCh := make(chan error, 1)
+
 	// Start server in goroutine
 	go func() {
 		logger.Info("Server listening", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("Server error", "error", err)
-			os.Exit(1)
+			serverErrCh <- err
 		}
 	}()
 
-	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	// Wait for interrupt signal or server error
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case sig := <-sigCh:
+		logger.Info("Received signal, shutting down", "signal", sig)
+	case err := <-serverErrCh:
+		logger.Error("Server failed, initiating shutdown", "error", err)
+	}
 
 	logger.Info("Shutting down server")
 
