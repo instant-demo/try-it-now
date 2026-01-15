@@ -1,4 +1,4 @@
-.PHONY: all build run test clean dev infra-up infra-down lint
+.PHONY: all build run test clean dev infra-up infra-down lint clean-demos clean-data clean-all
 
 # Build variables
 BINARY_NAME=demo-multiplexer
@@ -67,3 +67,17 @@ fmt:
 # Tidy modules
 tidy:
 	$(GO) mod tidy
+
+# Clean up demo containers (orphans from killed server)
+clean-demos:
+	@docker rm -f $$(docker ps -aq --filter name=demo-demo) 2>/dev/null || true
+	@echo "Demo containers cleaned"
+
+# Clean Valkey data (instances, pool, rate limits, counters)
+clean-data:
+	@docker exec deployments-valkey-1 valkey-cli FLUSHDB 2>/dev/null || true
+	@echo "Valkey data cleaned"
+
+# Clean everything (build artifacts + demos + data)
+clean-all: clean clean-demos clean-data
+	@echo "Full cleanup complete"
