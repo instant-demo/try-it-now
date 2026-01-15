@@ -206,14 +206,14 @@ func (r *ValkeyRepository) AcquireFromPool(ctx context.Context) (*domain.Instanc
 		return nil, fmt.Errorf("failed to pop from pool: %w", err)
 	}
 
-	// Get the instance
-	instance, err := r.GetInstance(ctx, id)
-	if err != nil {
+	// Update state to assigned first
+	if err := r.UpdateInstanceState(ctx, id, domain.StateAssigned); err != nil {
 		return nil, err
 	}
 
-	// Update state to assigned
-	if err := r.UpdateInstanceState(ctx, id, domain.StateAssigned); err != nil {
+	// Get the updated instance
+	instance, err := r.GetInstance(ctx, id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -401,7 +401,8 @@ func (r *ValkeyRepository) CheckRateLimit(ctx context.Context, ip string, hourly
 	dayKey := keyRateLimitDay + ip
 
 	// Check hourly limit
-	hourCount, err := r.client.Do(ctx, r.client.B().Get().Key(hourKey).Build()).ToInt64()
+	// Use AsInt64 because GET returns blob string, not RESP3 integer
+	hourCount, err := r.client.Do(ctx, r.client.B().Get().Key(hourKey).Build()).AsInt64()
 	if err != nil && !valkey.IsValkeyNil(err) {
 		return false, fmt.Errorf("failed to get hourly rate: %w", err)
 	}
@@ -410,7 +411,7 @@ func (r *ValkeyRepository) CheckRateLimit(ctx context.Context, ip string, hourly
 	}
 
 	// Check daily limit
-	dayCount, err := r.client.Do(ctx, r.client.B().Get().Key(dayKey).Build()).ToInt64()
+	dayCount, err := r.client.Do(ctx, r.client.B().Get().Key(dayKey).Build()).AsInt64()
 	if err != nil && !valkey.IsValkeyNil(err) {
 		return false, fmt.Errorf("failed to get daily rate: %w", err)
 	}

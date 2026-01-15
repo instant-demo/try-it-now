@@ -510,7 +510,7 @@ func TestValkeyRepository_IncrementCounter(t *testing.T) {
 
 	// Verify count
 	key := keyCounter + counterName
-	count, err := repo.client.Do(ctx, repo.client.B().Get().Key(key).Build()).ToInt64()
+	count, err := repo.client.Do(ctx, repo.client.B().Get().Key(key).Build()).AsInt64()
 	if err != nil {
 		t.Fatalf("Get counter error = %v", err)
 	}

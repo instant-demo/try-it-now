@@ -238,15 +238,19 @@ func (m *CaddyRouteManager) ensureServerExists(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Caddy returns 200 with "null" body (possibly with newline) when path exists but has no value
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
-		return nil // Server exists
+	bodyStr := strings.TrimSpace(string(body))
+	if resp.StatusCode == http.StatusOK && bodyStr != "null" && bodyStr != "" {
+		return nil // Server actually exists
 	}
 
-	// Create server
+	// Create server on a separate port to avoid conflict with existing servers
 	server := caddyServer{
-		Listen: []string{":443", ":80"},
+		Listen: []string{":8443"},
 		Routes: []caddyRoute{},
 	}
 
