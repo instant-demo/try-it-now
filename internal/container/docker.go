@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/boss/demo-multiplexer/internal/config"
@@ -18,10 +17,8 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/google/uuid"
 )
-
-// instanceIDCounter provides unique suffixes for instance ID generation.
-var instanceIDCounter uint64
 
 // ErrCRIUNotSupported is returned when attempting CRIU restore in Docker mode.
 var ErrCRIUNotSupported = errors.New("CRIU checkpoint restore not supported in Docker mode")
@@ -29,12 +26,13 @@ var ErrCRIUNotSupported = errors.New("CRIU checkpoint restore not supported in D
 // DockerRuntime implements Runtime using the Docker SDK.
 // This is the development/fallback mode without CRIU support.
 type DockerRuntime struct {
-	client    *client.Client
-	cfg       *config.ContainerConfig
-	psCfg     *config.PrestaShopConfig
-	proxyCfg  *config.ProxyConfig
-	networkID string
-	logger    *logging.Logger
+	client       *client.Client
+	cfg          *config.ContainerConfig
+	psCfg        *config.PrestaShopConfig
+	proxyCfg     *config.ProxyConfig
+	networkID    string
+	logger       *logging.Logger
+	healthClient *http.Client // Shared HTTP client for health checks
 }
 
 // NewDockerRuntime creates a new Docker-based runtime.
@@ -50,6 +48,14 @@ func NewDockerRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfi
 		psCfg:    psCfg,
 		proxyCfg: proxyCfg,
 		logger:   logger.With("component", "docker"),
+		healthClient: &http.Client{
+			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     30 * time.Second,
+			},
+		},
 	}, nil
 }
 
@@ -76,7 +82,7 @@ func (r *DockerRuntime) Start(ctx context.Context, opts StartOptions) (*domain.I
 	portBindings := nat.PortMap{
 		containerPort: []nat.PortBinding{
 			{
-				HostIP:   "0.0.0.0",
+				HostIP:   "127.0.0.1",
 				HostPort: strconv.Itoa(opts.Port),
 			},
 		},
@@ -235,17 +241,13 @@ func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 	conn.Close()
 
 	// Then: HTTP GET to verify application responds
-	httpClient := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
 	url := fmt.Sprintf("http://%s/", addr)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false, nil
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := r.healthClient.Do(req)
 	if err != nil {
 		r.logger.Debug("Health check HTTP failed", "containerID", containerID[:12], "error", err)
 		return false, nil
@@ -288,11 +290,10 @@ func (r *DockerRuntime) buildEnvVars(opts StartOptions) []string {
 	return env
 }
 
-// generateInstanceID creates a unique instance ID.
-// Uses atomic counter combined with timestamp for guaranteed uniqueness.
+// generateInstanceID creates a unique instance ID using UUID.
+// UUIDs prevent ID enumeration attacks and information leakage.
 func generateInstanceID() string {
-	n := atomic.AddUint64(&instanceIDCounter, 1)
-	return fmt.Sprintf("demo-%d-%d", time.Now().Unix(), n)
+	return fmt.Sprintf("demo-%s", uuid.New().String())
 }
 
 // Compile-time check that DockerRuntime implements Runtime

@@ -33,6 +33,7 @@ type PodmanRuntime struct {
 	criuAvailable bool
 	criuVersion   string
 	logger        *logging.Logger
+	healthClient  *http.Client // Shared HTTP client for health checks
 }
 
 // NewPodmanRuntime creates a new Podman-based runtime with optional CRIU support.
@@ -49,6 +50,14 @@ func NewPodmanRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfi
 		psCfg:    psCfg,
 		proxyCfg: proxyCfg,
 		logger:   logger.With("component", "podman"),
+		healthClient: &http.Client{
+			Timeout: 5 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     30 * time.Second,
+			},
+		},
 	}
 
 	// Check CRIU availability if enabled
@@ -162,7 +171,7 @@ func (r *PodmanRuntime) RestoreFromCheckpoint(ctx context.Context, opts RestoreO
 		WithName(containerName).
 		WithIgnoreStaticIP(true).  // Get new IP address
 		WithIgnoreStaticMAC(true). // Get new MAC address
-		WithPublishPorts([]string{fmt.Sprintf("%d:80", opts.Port)})
+		WithPublishPorts([]string{fmt.Sprintf("127.0.0.1:%d:80", opts.Port)})
 
 	// Perform restore
 	report, err := containers.Restore(r.conn, "", restoreOpts)
@@ -201,7 +210,7 @@ func (r *PodmanRuntime) Start(ctx context.Context, opts StartOptions) (*domain.I
 		{
 			ContainerPort: 80,
 			HostPort:      uint16(opts.Port),
-			HostIP:        "0.0.0.0",
+			HostIP:        "127.0.0.1",
 			Protocol:      "tcp",
 		},
 	}
@@ -332,14 +341,13 @@ func (r *PodmanRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 	conn.Close()
 
 	// HTTP GET to verify application responds
-	httpClient := &http.Client{Timeout: 5 * time.Second}
 	url := fmt.Sprintf("http://%s/", addr)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return false, nil
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := r.healthClient.Do(req)
 	if err != nil {
 		r.logger.Debug("Health check HTTP failed", "containerID", containerID[:12], "error", err)
 		return false, nil
