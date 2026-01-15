@@ -241,19 +241,19 @@ func TestBuildEnvVars(t *testing.T) {
 	env := runtime.buildEnvVars(opts)
 
 	expected := map[string]bool{
-		"PS_DOMAIN=demo-abc.example.com":   true,
-		"PS_ENABLE_SSL=1":                  true,
-		"PS_FOLDER_ADMIN=admin123":         true,
+		"PS_DOMAIN=demo-abc.example.com":     true,
+		"PS_ENABLE_SSL=1":                    true,
+		"PS_FOLDER_ADMIN=admin123":           true,
 		"PS_FOLDER_INSTALL=install-disabled": true,
-		"DB_SERVER=db.example.com":         true,
-		"DB_PORT=3306":                     true,
-		"DB_NAME=testdb":                   true,
-		"DB_USER=testuser":                 true,
-		"DB_PASSWD=testpass":               true,
-		"DB_PREFIX=abc_":                   true,
-		"ADMIN_MAIL=demo@test.com":         true,
-		"ADMIN_PASSWD=demopass":            true,
-		"CUSTOM_VAR=custom_value":          true,
+		"DB_SERVER=db.example.com":           true,
+		"DB_PORT=3306":                       true,
+		"DB_NAME=testdb":                     true,
+		"DB_USER=testuser":                   true,
+		"DB_PASSWD=testpass":                 true,
+		"DB_PREFIX=abc_":                     true,
+		"ADMIN_MAIL=demo@test.com":           true,
+		"ADMIN_PASSWD=demopass":              true,
+		"CUSTOM_VAR=custom_value":            true,
 	}
 
 	for _, e := range env {

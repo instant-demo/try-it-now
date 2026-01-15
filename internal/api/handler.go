@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/boss/demo-multiplexer/internal/config"
 	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/boss/demo-multiplexer/internal/metrics"
 	"github.com/boss/demo-multiplexer/internal/pool"
 	"github.com/boss/demo-multiplexer/internal/store"
 	"github.com/gin-gonic/gin"
@@ -15,17 +17,19 @@ import (
 
 // Handler holds the HTTP handlers and dependencies.
 type Handler struct {
-	cfg   *config.Config
-	pool  pool.Manager
-	store store.Repository
+	cfg     *config.Config
+	pool    pool.Manager
+	store   store.Repository
+	metrics *metrics.Collector
 }
 
 // NewHandler creates a new API handler.
-func NewHandler(cfg *config.Config, poolMgr pool.Manager, repo store.Repository) *Handler {
+func NewHandler(cfg *config.Config, poolMgr pool.Manager, repo store.Repository, m *metrics.Collector) *Handler {
 	return &Handler{
-		cfg:   cfg,
-		pool:  poolMgr,
-		store: repo,
+		cfg:     cfg,
+		pool:    poolMgr,
+		store:   repo,
+		metrics: m,
 	}
 }
 
@@ -35,6 +39,7 @@ func (h *Handler) Router() *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
+	r.Use(h.metricsMiddleware())
 
 	// Health check
 	r.GET("/health", h.health)
@@ -60,9 +65,40 @@ func (h *Handler) Router() *gin.Engine {
 	}
 
 	// Prometheus metrics
-	r.GET("/metrics", h.metrics)
+	if h.metrics != nil {
+		r.GET("/metrics", gin.WrapH(h.metrics.Handler()))
+	} else {
+		// Stub handler when metrics is nil (for tests)
+		r.GET("/metrics", func(c *gin.Context) {
+			c.String(http.StatusOK, "# metrics disabled\n")
+		})
+	}
 
 	return r
+}
+
+// metricsMiddleware records HTTP request duration metrics.
+func (h *Handler) metricsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if h.metrics == nil {
+			c.Next()
+			return
+		}
+
+		start := time.Now()
+		c.Next()
+
+		path := c.FullPath()
+		if path == "" {
+			path = "unknown"
+		}
+
+		h.metrics.HTTPRequestDuration.WithLabelValues(
+			c.Request.Method,
+			path,
+			strconv.Itoa(c.Writer.Status()),
+		).Observe(time.Since(start).Seconds())
+	}
 }
 
 // Response types
@@ -76,14 +112,14 @@ type AcquireResponse struct {
 }
 
 type InstanceResponse struct {
-	ID          string    `json:"id"`
-	URL         string    `json:"url"`
-	AdminURL    string    `json:"admin_url"`
-	State       string    `json:"state"`
-	CreatedAt   time.Time `json:"created_at"`
-	AssignedAt  time.Time `json:"assigned_at,omitempty"`
-	ExpiresAt   time.Time `json:"expires_at,omitempty"`
-	TTLRemaining int      `json:"ttl_remaining_seconds"`
+	ID           string    `json:"id"`
+	URL          string    `json:"url"`
+	AdminURL     string    `json:"admin_url"`
+	State        string    `json:"state"`
+	CreatedAt    time.Time `json:"created_at"`
+	AssignedAt   time.Time `json:"assigned_at,omitempty"`
+	ExpiresAt    time.Time `json:"expires_at,omitempty"`
+	TTLRemaining int       `json:"ttl_remaining_seconds"`
 }
 
 type ExtendRequest struct {
@@ -124,6 +160,7 @@ func (h *Handler) health(c *gin.Context) {
 // acquireDemo acquires an instance from the warm pool.
 func (h *Handler) acquireDemo(c *gin.Context) {
 	ctx := c.Request.Context()
+	start := time.Now()
 
 	// Get client IP for rate limiting
 	clientIP := c.ClientIP()
@@ -131,6 +168,9 @@ func (h *Handler) acquireDemo(c *gin.Context) {
 	// Check rate limit
 	allowed, err := h.store.CheckRateLimit(ctx, clientIP, h.cfg.RateLimit.RequestsPerHour, h.cfg.RateLimit.RequestsPerDay)
 	if err != nil {
+		if h.metrics != nil {
+			h.metrics.AcquisitionsTotal.WithLabelValues("error").Inc()
+		}
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error: "Failed to check rate limit",
 			Code:  "RATE_LIMIT_ERROR",
@@ -138,6 +178,10 @@ func (h *Handler) acquireDemo(c *gin.Context) {
 		return
 	}
 	if !allowed {
+		if h.metrics != nil {
+			h.metrics.RateLimitHitsTotal.Inc()
+			h.metrics.AcquisitionsTotal.WithLabelValues("rate_limited").Inc()
+		}
 		c.JSON(http.StatusTooManyRequests, ErrorResponse{
 			Error: "Rate limit exceeded",
 			Code:  "RATE_LIMITED",
@@ -151,6 +195,9 @@ func (h *Handler) acquireDemo(c *gin.Context) {
 	instance, err := h.pool.Acquire(ctx)
 	if err != nil {
 		if errors.Is(err, domain.ErrPoolExhausted) {
+			if h.metrics != nil {
+				h.metrics.AcquisitionsTotal.WithLabelValues("pool_exhausted").Inc()
+			}
 			c.JSON(http.StatusServiceUnavailable, ErrorResponse{
 				Error:   "No demo instances available",
 				Code:    "POOL_EXHAUSTED",
@@ -158,11 +205,20 @@ func (h *Handler) acquireDemo(c *gin.Context) {
 			})
 			return
 		}
+		if h.metrics != nil {
+			h.metrics.AcquisitionsTotal.WithLabelValues("error").Inc()
+		}
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error: "Failed to acquire demo instance",
 			Code:  "ACQUIRE_ERROR",
 		})
 		return
+	}
+
+	// Record successful acquisition
+	if h.metrics != nil {
+		h.metrics.AcquisitionsTotal.WithLabelValues("success").Inc()
+		h.metrics.AcquisitionDuration.Observe(time.Since(start).Seconds())
 	}
 
 	// Increment rate limit
@@ -284,9 +340,9 @@ func (h *Handler) extendDemo(c *gin.Context) {
 	instance, _ = h.store.GetInstance(ctx, id)
 
 	c.JSON(http.StatusOK, gin.H{
-		"id":           instance.ID,
+		"id":            instance.ID,
 		"ttl_remaining": int(instance.TTLRemaining().Seconds()),
-		"expires_at":   instance.ExpiresAt,
+		"expires_at":    instance.ExpiresAt,
 	})
 }
 
@@ -374,9 +430,9 @@ func (h *Handler) demoStatus(c *gin.Context) {
 
 			ttl := int(instance.TTLRemaining().Seconds())
 			c.SSEvent("ttl", gin.H{
-				"id":           id,
+				"id":            id,
 				"ttl_remaining": ttl,
-				"state":        string(instance.State),
+				"state":         string(instance.State),
 			})
 			c.Writer.Flush()
 
@@ -409,39 +465,4 @@ func (h *Handler) poolStats(c *gin.Context) {
 		Target:   stats.Target,
 		Capacity: stats.Capacity,
 	})
-}
-
-// metrics returns Prometheus metrics.
-func (h *Handler) metrics(c *gin.Context) {
-	// For now, just return basic text format
-	// Full Prometheus integration can be added later
-	ctx := c.Request.Context()
-	stats, err := h.pool.Stats(ctx)
-	if err != nil {
-		c.String(http.StatusInternalServerError, "# error getting stats")
-		return
-	}
-
-	metrics := fmt.Sprintf(`# HELP demo_pool_ready Number of ready instances in pool
-# TYPE demo_pool_ready gauge
-demo_pool_ready %d
-
-# HELP demo_pool_assigned Number of assigned instances
-# TYPE demo_pool_assigned gauge
-demo_pool_assigned %d
-
-# HELP demo_pool_warming Number of instances being warmed
-# TYPE demo_pool_warming gauge
-demo_pool_warming %d
-
-# HELP demo_pool_target Target pool size
-# TYPE demo_pool_target gauge
-demo_pool_target %d
-
-# HELP demo_pool_capacity Maximum pool capacity
-# TYPE demo_pool_capacity gauge
-demo_pool_capacity %d
-`, stats.Ready, stats.Assigned, stats.Warming, stats.Target, stats.Capacity)
-
-	c.String(http.StatusOK, metrics)
 }

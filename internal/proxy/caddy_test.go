@@ -25,7 +25,7 @@ func skipIfNoCaddy(t *testing.T) *CaddyRouteManager {
 		BaseDomain:    "localhost",
 	}
 
-	manager := NewCaddyRouteManager(cfg)
+	manager := NewCaddyRouteManager(cfg, nil)
 
 	// Check if Caddy is available
 	ctx := context.Background()
@@ -48,7 +48,7 @@ func TestCaddyRouteManager_BuildCaddyRoute(t *testing.T) {
 		CaddyAdminURL: "http://localhost:2019",
 		BaseDomain:    "example.com",
 	}
-	manager := NewCaddyRouteManager(cfg)
+	manager := NewCaddyRouteManager(cfg, nil)
 
 	route := Route{
 		Hostname:    "demo-abc123",
@@ -115,7 +115,7 @@ func TestCaddyRouteManager_CaddyRouteToRoute(t *testing.T) {
 		CaddyAdminURL: "http://localhost:2019",
 		BaseDomain:    "example.com",
 	}
-	manager := NewCaddyRouteManager(cfg)
+	manager := NewCaddyRouteManager(cfg, nil)
 
 	cRoute := caddyRoute{
 		ID: "demo-route-demo-xyz789",
@@ -166,7 +166,7 @@ func TestCaddyRouteManager_CaddyRouteToRoute_EmptyMatch(t *testing.T) {
 		CaddyAdminURL: "http://localhost:2019",
 		BaseDomain:    "example.com",
 	}
-	manager := NewCaddyRouteManager(cfg)
+	manager := NewCaddyRouteManager(cfg, nil)
 
 	cRoute := caddyRoute{
 		Match:  []caddyMatch{},
@@ -184,7 +184,7 @@ func TestCaddyRouteManager_RouteID(t *testing.T) {
 		CaddyAdminURL: "http://localhost:2019",
 		BaseDomain:    "example.com",
 	}
-	manager := NewCaddyRouteManager(cfg)
+	manager := NewCaddyRouteManager(cfg, nil)
 
 	tests := []struct {
 		hostname string
@@ -276,7 +276,7 @@ func TestCaddyRouteManager_WithMockServer(t *testing.T) {
 		CaddyAdminURL: server.URL,
 		BaseDomain:    "test.local",
 	}
-	manager := NewCaddyRouteManager(cfg)
+	manager := NewCaddyRouteManager(cfg, nil)
 	ctx := context.Background()
 
 	// Test Health

@@ -12,6 +12,7 @@ import (
 	"github.com/boss/demo-multiplexer/internal/api"
 	"github.com/boss/demo-multiplexer/internal/config"
 	"github.com/boss/demo-multiplexer/internal/container"
+	"github.com/boss/demo-multiplexer/internal/metrics"
 	"github.com/boss/demo-multiplexer/internal/pool"
 	"github.com/boss/demo-multiplexer/internal/proxy"
 	"github.com/boss/demo-multiplexer/internal/queue"
@@ -28,6 +29,9 @@ func main() {
 
 	// Initialize structured logger
 	logger := logging.New(cfg.Log.Level, cfg.Log.Format)
+
+	// Initialize metrics collector
+	metricsCollector := metrics.NewCollector()
 
 	logger.Info("Starting Demo Multiplexer", "mode", cfg.Container.Mode)
 
@@ -103,7 +107,7 @@ func main() {
 	defer runtimeCloser()
 
 	// Create Caddy route manager
-	proxyMgr := proxy.NewCaddyRouteManager(&cfg.Proxy)
+	proxyMgr := proxy.NewCaddyRouteManager(&cfg.Proxy, metricsCollector)
 
 	// Create pool manager
 	poolCfg := pool.ManagerConfig{
@@ -125,6 +129,7 @@ func main() {
 		cfg.Proxy.BaseDomain,
 		cfg.Container.CheckpointPath,
 		logger,
+		metricsCollector,
 	)
 
 	// Start pool replenisher
@@ -133,8 +138,30 @@ func main() {
 	}
 	defer poolMgr.StopReplenisher()
 
+	// Start metrics gauge updater
+	gaugeCtx, cancelGauge := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-gaugeCtx.Done():
+				return
+			case <-ticker.C:
+				if stats, err := poolMgr.Stats(gaugeCtx); err == nil {
+					metricsCollector.PoolReady.Set(float64(stats.Ready))
+					metricsCollector.PoolAssigned.Set(float64(stats.Assigned))
+					metricsCollector.PoolWarming.Set(float64(stats.Warming))
+					metricsCollector.PoolTarget.Set(float64(stats.Target))
+					metricsCollector.PoolCapacity.Set(float64(stats.Capacity))
+				}
+			}
+		}
+	}()
+	defer cancelGauge()
+
 	// Create API handler
-	handler := api.NewHandler(cfg, poolMgr, repo)
+	handler := api.NewHandler(cfg, poolMgr, repo, metricsCollector)
 
 	// Create HTTP server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

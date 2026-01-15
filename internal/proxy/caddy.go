@@ -12,6 +12,7 @@ import (
 
 	"github.com/boss/demo-multiplexer/internal/config"
 	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/boss/demo-multiplexer/internal/metrics"
 )
 
 // CaddyRouteManager implements RouteManager using the Caddy admin API.
@@ -20,10 +21,11 @@ type CaddyRouteManager struct {
 	baseDomain string
 	httpClient *http.Client
 	serverName string // The Caddy server name (e.g., "srv0")
+	metrics    *metrics.Collector
 }
 
 // NewCaddyRouteManager creates a new Caddy-based route manager.
-func NewCaddyRouteManager(cfg *config.ProxyConfig) *CaddyRouteManager {
+func NewCaddyRouteManager(cfg *config.ProxyConfig, m *metrics.Collector) *CaddyRouteManager {
 	return &CaddyRouteManager{
 		adminURL:   cfg.CaddyAdminURL,
 		baseDomain: cfg.BaseDomain,
@@ -31,15 +33,16 @@ func NewCaddyRouteManager(cfg *config.ProxyConfig) *CaddyRouteManager {
 			Timeout: 10 * time.Second,
 		},
 		serverName: "demo", // We'll create a dedicated server for demo routes
+		metrics:    m,
 	}
 }
 
 // caddyRoute represents a Caddy route in JSON format.
 type caddyRoute struct {
-	ID       string          `json:"@id,omitempty"`
-	Match    []caddyMatch    `json:"match,omitempty"`
-	Handle   []caddyHandler  `json:"handle"`
-	Terminal bool            `json:"terminal,omitempty"`
+	ID       string         `json:"@id,omitempty"`
+	Match    []caddyMatch   `json:"match,omitempty"`
+	Handle   []caddyHandler `json:"handle"`
+	Terminal bool           `json:"terminal,omitempty"`
 }
 
 type caddyMatch struct {
@@ -67,9 +70,11 @@ type caddyServer struct {
 }
 
 // AddRoute adds a route for a demo instance.
-func (m *CaddyRouteManager) AddRoute(ctx context.Context, route Route) error {
+func (mgr *CaddyRouteManager) AddRoute(ctx context.Context, route Route) error {
+	start := time.Now()
+
 	// Build the Caddy route
-	cRoute := m.buildCaddyRoute(route)
+	cRoute := mgr.buildCaddyRoute(route)
 
 	// Marshal to JSON
 	data, err := json.Marshal(cRoute)
@@ -79,43 +84,68 @@ func (m *CaddyRouteManager) AddRoute(ctx context.Context, route Route) error {
 
 	// POST to Caddy API
 	// First, ensure the server exists, then add the route
-	if err := m.ensureServerExists(ctx); err != nil {
+	if err := mgr.ensureServerExists(ctx); err != nil {
+		if mgr.metrics != nil {
+			mgr.metrics.RouteOpsTotal.WithLabelValues("add", "failure").Inc()
+		}
 		return err
 	}
 
-	url := fmt.Sprintf("%s/config/apps/http/servers/%s/routes", m.adminURL, m.serverName)
+	url := fmt.Sprintf("%s/config/apps/http/servers/%s/routes", mgr.adminURL, mgr.serverName)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
+		if mgr.metrics != nil {
+			mgr.metrics.RouteOpsTotal.WithLabelValues("add", "failure").Inc()
+		}
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := m.httpClient.Do(req)
+	resp, err := mgr.httpClient.Do(req)
 	if err != nil {
+		if mgr.metrics != nil {
+			mgr.metrics.RouteOpsTotal.WithLabelValues("add", "failure").Inc()
+		}
 		return fmt.Errorf("failed to add route: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		if mgr.metrics != nil {
+			mgr.metrics.RouteOpsTotal.WithLabelValues("add", "failure").Inc()
+		}
 		return fmt.Errorf("caddy returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Record success metrics
+	if mgr.metrics != nil {
+		mgr.metrics.RouteAddDuration.Observe(time.Since(start).Seconds())
+		mgr.metrics.RouteOpsTotal.WithLabelValues("add", "success").Inc()
 	}
 
 	return nil
 }
 
 // RemoveRoute removes a route by hostname.
-func (m *CaddyRouteManager) RemoveRoute(ctx context.Context, hostname string) error {
-	routeID := m.routeID(hostname)
-	url := fmt.Sprintf("%s/id/%s", m.adminURL, routeID)
+func (mgr *CaddyRouteManager) RemoveRoute(ctx context.Context, hostname string) error {
+	start := time.Now()
+	routeID := mgr.routeID(hostname)
+	url := fmt.Sprintf("%s/id/%s", mgr.adminURL, routeID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
+		if mgr.metrics != nil {
+			mgr.metrics.RouteOpsTotal.WithLabelValues("remove", "failure").Inc()
+		}
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := m.httpClient.Do(req)
+	resp, err := mgr.httpClient.Do(req)
 	if err != nil {
+		if mgr.metrics != nil {
+			mgr.metrics.RouteOpsTotal.WithLabelValues("remove", "failure").Inc()
+		}
 		return fmt.Errorf("failed to remove route: %w", err)
 	}
 	defer resp.Body.Close()
@@ -123,7 +153,16 @@ func (m *CaddyRouteManager) RemoveRoute(ctx context.Context, hostname string) er
 	// 404 is fine - route might already be gone
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
+		if mgr.metrics != nil {
+			mgr.metrics.RouteOpsTotal.WithLabelValues("remove", "failure").Inc()
+		}
 		return fmt.Errorf("caddy returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Record success metrics
+	if mgr.metrics != nil {
+		mgr.metrics.RouteRemoveDuration.Observe(time.Since(start).Seconds())
+		mgr.metrics.RouteOpsTotal.WithLabelValues("remove", "success").Inc()
 	}
 
 	return nil

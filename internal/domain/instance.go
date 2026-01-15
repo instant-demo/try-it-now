@@ -16,10 +16,10 @@ const (
 type Instance struct {
 	ID          string        `json:"id"`
 	ContainerID string        `json:"container_id"`
-	Hostname    string        `json:"hostname"`     // e.g., "demo-a1b2c3d4"
-	Port        int           `json:"port"`         // Host port mapping
+	Hostname    string        `json:"hostname"` // e.g., "demo-a1b2c3d4"
+	Port        int           `json:"port"`     // Host port mapping
 	State       InstanceState `json:"state"`
-	DBPrefix    string        `json:"db_prefix"`    // e.g., "a1b2c3d4_"
+	DBPrefix    string        `json:"db_prefix"` // e.g., "a1b2c3d4_"
 	UserIP      string        `json:"user_ip,omitempty"`
 	CreatedAt   time.Time     `json:"created_at"`
 	AssignedAt  *time.Time    `json:"assigned_at,omitempty"`

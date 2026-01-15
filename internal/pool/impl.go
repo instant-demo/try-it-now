@@ -9,6 +9,7 @@ import (
 
 	"github.com/boss/demo-multiplexer/internal/container"
 	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/boss/demo-multiplexer/internal/metrics"
 	"github.com/boss/demo-multiplexer/internal/proxy"
 	"github.com/boss/demo-multiplexer/internal/store"
 	"github.com/boss/demo-multiplexer/pkg/logging"
@@ -25,16 +26,17 @@ type CRIURuntime interface {
 
 // PoolManager implements the Manager interface.
 type PoolManager struct {
-	cfg      ManagerConfig
-	repo     store.Repository
-	runtime  container.Runtime
-	proxy    proxy.RouteManager
-	logger   *logging.Logger
+	cfg     ManagerConfig
+	repo    store.Repository
+	runtime container.Runtime
+	proxy   proxy.RouteManager
+	logger  *logging.Logger
+	metrics *metrics.Collector
 
-	stopCh   chan struct{}
-	doneCh   chan struct{}
-	mu       sync.Mutex
-	running  bool
+	stopCh  chan struct{}
+	doneCh  chan struct{}
+	mu      sync.Mutex
+	running bool
 
 	// Configuration from external configs
 	containerImage string
@@ -54,6 +56,7 @@ func NewPoolManager(
 	baseDomain string,
 	checkpointPath string,
 	logger *logging.Logger,
+	m *metrics.Collector,
 ) *PoolManager {
 	return &PoolManager{
 		cfg:            cfg,
@@ -65,6 +68,7 @@ func NewPoolManager(
 		baseDomain:     baseDomain,
 		checkpointPath: checkpointPath,
 		logger:         logger.With("component", "pool"),
+		metrics:        m,
 	}
 }
 
@@ -139,6 +143,11 @@ func (m *PoolManager) Release(ctx context.Context, instanceID string) error {
 	// Delete instance from store
 	if err := m.repo.DeleteInstance(ctx, instanceID); err != nil {
 		return fmt.Errorf("failed to delete instance: %w", err)
+	}
+
+	// Record release metric
+	if m.metrics != nil {
+		m.metrics.ReleasesTotal.WithLabelValues("manual").Inc()
 	}
 
 	return nil
@@ -250,6 +259,9 @@ func (m *PoolManager) replenishLoop(ctx context.Context) {
 // provisionInstance creates a new instance and adds it to the pool.
 // It first attempts CRIU restore if available, falling back to cold start.
 func (m *PoolManager) provisionInstance(ctx context.Context) error {
+	start := time.Now()
+	method := "cold_start"
+
 	// Allocate port
 	port, err := m.repo.AllocatePort(ctx)
 	if err != nil {
@@ -264,6 +276,7 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 
 	// Try CRIU restore first if runtime supports it
 	if criuRuntime, ok := m.runtime.(CRIURuntime); ok && criuRuntime.CRIUAvailable() {
+		criuStart := time.Now()
 		restoreOpts := container.RestoreOptions{
 			CheckpointPath: m.checkpointPath,
 			Name:           "demo-" + hostname,
@@ -282,6 +295,10 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 			m.logger.Warn("CRIU restore failed, falling back to Start()", "error", err)
 			instance = nil // Ensure we fall through to Start()
 		} else {
+			method = "criu_restore"
+			if m.metrics != nil {
+				m.metrics.CRIURestoreDuration.Observe(time.Since(criuStart).Seconds())
+			}
 			m.logger.Info("Restored instance from checkpoint", "instanceID", instance.ID, "port", port)
 		}
 	}
@@ -305,6 +322,9 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 		if err != nil {
 			// Release the port we allocated
 			_ = m.repo.ReleasePort(ctx, port)
+			if m.metrics != nil {
+				m.metrics.ProvisionsTotal.WithLabelValues(method, "failure").Inc()
+			}
 			return fmt.Errorf("failed to start container: %w", err)
 		}
 	}
@@ -317,6 +337,9 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 		// Clean up on failure
 		_ = m.runtime.Stop(ctx, instance.ContainerID)
 		_ = m.repo.ReleasePort(ctx, port)
+		if m.metrics != nil {
+			m.metrics.ProvisionsTotal.WithLabelValues(method, "failure").Inc()
+		}
 		return fmt.Errorf("container failed health check: %w", err)
 	}
 
@@ -328,7 +351,16 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 		// Clean up on failure
 		_ = m.runtime.Stop(ctx, instance.ContainerID)
 		_ = m.repo.ReleasePort(ctx, port)
+		if m.metrics != nil {
+			m.metrics.ProvisionsTotal.WithLabelValues(method, "failure").Inc()
+		}
 		return fmt.Errorf("failed to add to pool: %w", err)
+	}
+
+	// Record success metrics
+	if m.metrics != nil {
+		m.metrics.ProvisionsTotal.WithLabelValues(method, "success").Inc()
+		m.metrics.ProvisionDuration.WithLabelValues(method).Observe(time.Since(start).Seconds())
 	}
 
 	m.logger.Info("Provisioned new instance", "instanceID", instance.ID, "port", port)
@@ -339,6 +371,8 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 // It includes a brief initial delay to allow the container process to start,
 // then polls at 1-second intervals until the container responds.
 func (m *PoolManager) waitForReady(ctx context.Context, instance *domain.Instance) error {
+	start := time.Now()
+
 	// Give container a moment to start its internal process (industry best practice: "start period")
 	time.Sleep(1 * time.Second)
 
@@ -355,14 +389,28 @@ func (m *PoolManager) waitForReady(ctx context.Context, instance *domain.Instanc
 			return fmt.Errorf("timeout waiting for container to be ready after %d attempts", attempt)
 		case <-ticker.C:
 			attempt++
+			checkStart := time.Now()
 			healthy, err := m.runtime.HealthCheck(ctx, instance.ContainerID)
+			if m.metrics != nil {
+				m.metrics.HealthCheckDuration.Observe(time.Since(checkStart).Seconds())
+			}
 			if err != nil {
+				if m.metrics != nil {
+					m.metrics.HealthChecksTotal.WithLabelValues("error").Inc()
+				}
 				m.logger.Warn("Health check error", "instanceID", instance.ID, "attempt", attempt, "error", err)
 				continue
 			}
 			if healthy {
+				if m.metrics != nil {
+					m.metrics.HealthChecksTotal.WithLabelValues("healthy").Inc()
+					m.metrics.WaitForReadyDuration.Observe(time.Since(start).Seconds())
+				}
 				m.logger.Info("Container ready", "instanceID", instance.ID, "attempts", attempt)
 				return nil
+			}
+			if m.metrics != nil {
+				m.metrics.HealthChecksTotal.WithLabelValues("unhealthy").Inc()
 			}
 		}
 	}

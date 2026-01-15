@@ -11,6 +11,7 @@ import (
 
 	"github.com/boss/demo-multiplexer/internal/config"
 	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/boss/demo-multiplexer/internal/metrics"
 	"github.com/boss/demo-multiplexer/internal/pool"
 	"github.com/gin-gonic/gin"
 )
@@ -224,7 +225,7 @@ func newTestHandler() (*Handler, *MockPoolManager, *MockRepository) {
 	}
 	poolMgr := NewMockPoolManager()
 	repo := NewMockRepository()
-	h := NewHandler(cfg, poolMgr, repo)
+	h := NewHandler(cfg, poolMgr, repo, nil) // nil metrics for tests
 	return h, poolMgr, repo
 }
 
@@ -263,7 +264,7 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 	poolMgr := NewMockPoolManager()
 	repo := NewMockRepository()
-	h := NewHandler(cfg, poolMgr, repo)
+	h := NewHandler(cfg, poolMgr, repo, nil) // nil metrics for tests
 	router := h.Router()
 
 	w := httptest.NewRecorder()
@@ -408,7 +409,22 @@ func TestGetDemoEndpoint_Success(t *testing.T) {
 }
 
 func TestMetricsEndpoint(t *testing.T) {
-	h, _, _ := newTestHandler()
+	cfg := &config.Config{
+		Container: config.ContainerConfig{
+			Mode: "docker",
+		},
+		RateLimit: config.RateLimitConfig{
+			RequestsPerHour: 10,
+			RequestsPerDay:  50,
+		},
+		Pool: config.PoolConfig{
+			MaxTTL: 24 * time.Hour,
+		},
+	}
+	poolMgr := NewMockPoolManager()
+	repo := NewMockRepository()
+	metricsCollector := metrics.NewCollector()
+	h := NewHandler(cfg, poolMgr, repo, metricsCollector)
 	router := h.Router()
 
 	w := httptest.NewRecorder()
