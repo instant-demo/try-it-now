@@ -70,6 +70,36 @@ All `/api/v1/*` endpoints require `X-API-Key` header when `API_KEY` is configure
 - **MariaDB 10.11** (shared PrestaShop database)
 - **NATS JetStream** (async message queue)
 
+## Installation
+
+### Production Deployment
+
+```bash
+# Build binary
+make build
+
+# Copy binary and config
+cp build/demo-multiplexer /usr/local/bin/
+cp .env.example /etc/demo-multiplexer/.env
+chmod 600 /etc/demo-multiplexer/.env
+
+# Edit config (set API_KEY, TRUSTED_PROXIES, database credentials)
+vim /etc/demo-multiplexer/.env
+
+# Run (systemd unit in deployments/systemd/)
+demo-multiplexer
+```
+
+### Infrastructure Requirements
+
+- **Valkey/Redis** - State persistence
+- **Caddy 2** - Reverse proxy with admin API enabled
+- **Docker or Podman** - Container runtime
+- **MariaDB** - PrestaShop database
+- **NATS** - Message queue (optional)
+
+See `deployments/docker-compose.yml` for reference infrastructure setup.
+
 ## Development
 
 ```bash
@@ -96,9 +126,19 @@ See `.env.example` for all configuration options. Key settings:
 | `CONTAINER_MODE` | docker or podman | docker |
 | `BASE_DOMAIN` | Domain for instance URLs | localhost |
 
-## Documentation
+## Contributing
 
-See [CLAUDE.md](./CLAUDE.md) for detailed development instructions, package structure, and implementation details.
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/your-feature`)
+3. Run tests (`make test && make lint`)
+4. Commit with clear messages
+5. Open a PR against `main`
+
+See [CLAUDE.md](./CLAUDE.md) for architecture details and coding conventions.
+
+## Known Limitations
+
+- **Queue handlers** - NATS provision/cleanup handlers are stubs. Provisioning currently uses synchronous pool replenishment. Queue-based async provisioning is planned.
 
 ## License
 
