@@ -252,11 +252,13 @@ func TestLifecycle(t *testing.T) {
 		id = resp.ID
 		initialTTL = resp.TTL
 		t.Logf("Acquired: id=%s, url=%s, ttl=%ds", id, resp.URL, resp.TTL)
+	})
 
-		// Cleanup in case later subtests fail
-		t.Cleanup(func() {
+	// Cleanup at parent test level (runs after all subtests complete)
+	t.Cleanup(func() {
+		if id != "" {
 			c.release(context.Background(), id)
-		})
+		}
 	})
 
 	if id == "" {
