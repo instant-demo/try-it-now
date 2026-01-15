@@ -36,12 +36,14 @@ type PoolConfig struct {
 }
 
 type ContainerConfig struct {
-	Mode           string // "docker" or "podman"
-	CheckpointPath string
-	Image          string
-	Network        string
-	PortRangeStart int
-	PortRangeEnd   int
+	Mode             string // "docker" or "podman"
+	CheckpointPath   string
+	Image            string
+	Network          string
+	PortRangeStart   int
+	PortRangeEnd     int
+	PodmanSocketPath string // Unix socket path for Podman API
+	CRIUEnabled      bool   // Whether to attempt CRIU checkpoint/restore
 }
 
 type ProxyConfig struct {
@@ -96,12 +98,14 @@ func Load() *Config {
 			MaxTTL:             getEnvDuration("POOL_MAX_TTL", 24*time.Hour),
 		},
 		Container: ContainerConfig{
-			Mode:           getEnv("CONTAINER_MODE", "docker"),
-			CheckpointPath: getEnv("CONTAINER_CHECKPOINT_PATH", "/var/lib/checkpoints/prestashop.tar.gz"),
-			Image:          getEnv("CONTAINER_IMAGE", "prestashop/prestashop-flashlight:9.0.0"),
-			Network:        getEnv("CONTAINER_NETWORK", ""),
-			PortRangeStart: getEnvInt("CONTAINER_PORT_RANGE_START", 32000),
-			PortRangeEnd:   getEnvInt("CONTAINER_PORT_RANGE_END", 32999),
+			Mode:             getEnv("CONTAINER_MODE", "docker"),
+			CheckpointPath:   getEnv("CONTAINER_CHECKPOINT_PATH", "/var/lib/checkpoints/prestashop.tar.gz"),
+			Image:            getEnv("CONTAINER_IMAGE", "prestashop/prestashop-flashlight:9.0.0"),
+			Network:          getEnv("CONTAINER_NETWORK", ""),
+			PortRangeStart:   getEnvInt("CONTAINER_PORT_RANGE_START", 32000),
+			PortRangeEnd:     getEnvInt("CONTAINER_PORT_RANGE_END", 32999),
+			PodmanSocketPath: getEnv("PODMAN_SOCKET_PATH", "unix:///run/podman/podman.sock"),
+			CRIUEnabled:      getEnvBool("CRIU_ENABLED", true),
 		},
 		Proxy: ProxyConfig{
 			CaddyAdminURL: getEnv("CADDY_ADMIN_URL", "http://localhost:2019"),
@@ -163,6 +167,15 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		if d, err := time.ParseDuration(value); err == nil {
 			return d
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if b, err := strconv.ParseBool(value); err == nil {
+			return b
 		}
 	}
 	return defaultValue

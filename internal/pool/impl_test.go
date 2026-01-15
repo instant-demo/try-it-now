@@ -337,7 +337,7 @@ func TestPoolManager_Acquire(t *testing.T) {
 		MaxTTL:         24 * time.Hour,
 	}
 
-	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost")
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost", "")
 
 	// Pre-populate pool with an instance
 	instance := &domain.Instance{
@@ -383,7 +383,7 @@ func TestPoolManager_Acquire_PoolExhausted(t *testing.T) {
 	proxyMgr := NewMockRouteManager()
 
 	cfg := DefaultManagerConfig()
-	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost")
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost", "")
 
 	ctx := context.Background()
 
@@ -399,7 +399,7 @@ func TestPoolManager_Release(t *testing.T) {
 	proxyMgr := NewMockRouteManager()
 
 	cfg := DefaultManagerConfig()
-	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost")
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost", "")
 
 	// Create an instance
 	instance := &domain.Instance{
@@ -449,7 +449,7 @@ func TestPoolManager_Stats(t *testing.T) {
 		TargetPoolSize: 10,
 		MaxPoolSize:    20,
 	}
-	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost")
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost", "")
 
 	// Add some instances
 	repo.AddToPool(context.Background(), &domain.Instance{ID: "r1", State: domain.StateReady})
@@ -490,7 +490,7 @@ func TestPoolManager_TriggerReplenish(t *testing.T) {
 		MaxPoolSize:        10,
 		ReplenishThreshold: 0.5,
 	}
-	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost")
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost", "")
 
 	ctx := context.Background()
 
@@ -516,7 +516,7 @@ func TestPoolManager_StartStopReplenisher(t *testing.T) {
 		MaxPoolSize:       5,
 		ReplenishInterval: 100 * time.Millisecond,
 	}
-	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost")
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, "nginx:alpine", "", "localhost", "")
 
 	ctx := context.Background()
 

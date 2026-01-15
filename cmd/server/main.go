@@ -40,12 +40,30 @@ func main() {
 		log.Fatalf("Failed to initialize ports: %v", err)
 	}
 
-	// Create container runtime
-	runtime, err := container.NewDockerRuntime(&cfg.Container, &cfg.PrestaShop, &cfg.Proxy)
-	if err != nil {
-		log.Fatalf("Failed to create Docker runtime: %v", err)
+	// Create container runtime based on configuration
+	var runtime container.Runtime
+	var runtimeCloser func() error
+
+	switch cfg.Container.Mode {
+	case "podman":
+		podmanRuntime, err := container.NewPodmanRuntime(&cfg.Container, &cfg.PrestaShop, &cfg.Proxy)
+		if err != nil {
+			log.Fatalf("Failed to create Podman runtime: %v", err)
+		}
+		runtime = podmanRuntime
+		runtimeCloser = podmanRuntime.Close
+		log.Printf("CRIU checkpoint/restore available: %v", podmanRuntime.CRIUAvailable())
+	case "docker":
+		fallthrough
+	default:
+		dockerRuntime, err := container.NewDockerRuntime(&cfg.Container, &cfg.PrestaShop, &cfg.Proxy)
+		if err != nil {
+			log.Fatalf("Failed to create Docker runtime: %v", err)
+		}
+		runtime = dockerRuntime
+		runtimeCloser = dockerRuntime.Close
 	}
-	defer runtime.Close()
+	defer runtimeCloser()
 
 	// Create Caddy route manager
 	proxyMgr := proxy.NewCaddyRouteManager(&cfg.Proxy)
@@ -68,6 +86,7 @@ func main() {
 		cfg.Container.Image,
 		cfg.Container.Network,
 		cfg.Proxy.BaseDomain,
+		cfg.Container.CheckpointPath,
 	)
 
 	// Start pool replenisher

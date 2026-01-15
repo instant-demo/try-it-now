@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/boss/demo-multiplexer/internal/container"
@@ -12,6 +13,15 @@ import (
 	"github.com/boss/demo-multiplexer/internal/proxy"
 	"github.com/boss/demo-multiplexer/internal/store"
 )
+
+// instanceCounter provides unique suffixes for hostname/DB prefix generation.
+// Using atomic operations guarantees uniqueness across concurrent calls.
+var instanceCounter uint64
+
+// CRIURuntime is an optional interface for runtimes that support CRIU checkpoint/restore.
+type CRIURuntime interface {
+	CRIUAvailable() bool
+}
 
 // PoolManager implements the Manager interface.
 type PoolManager struct {
@@ -29,6 +39,7 @@ type PoolManager struct {
 	containerImage string
 	networkID      string
 	baseDomain     string
+	checkpointPath string // Path to CRIU checkpoint archive
 }
 
 // NewPoolManager creates a new pool manager.
@@ -40,6 +51,7 @@ func NewPoolManager(
 	containerImage string,
 	networkID string,
 	baseDomain string,
+	checkpointPath string,
 ) *PoolManager {
 	return &PoolManager{
 		cfg:            cfg,
@@ -49,6 +61,7 @@ func NewPoolManager(
 		containerImage: containerImage,
 		networkID:      networkID,
 		baseDomain:     baseDomain,
+		checkpointPath: checkpointPath,
 	}
 }
 
@@ -233,6 +246,7 @@ func (m *PoolManager) replenishLoop(ctx context.Context) {
 }
 
 // provisionInstance creates a new instance and adds it to the pool.
+// It first attempts CRIU restore if available, falling back to cold start.
 func (m *PoolManager) provisionInstance(ctx context.Context) error {
 	// Allocate port
 	port, err := m.repo.AllocatePort(ctx)
@@ -244,25 +258,53 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 	hostname := m.generateHostname()
 	dbPrefix := m.generateDBPrefix()
 
-	// Start container
-	opts := container.StartOptions{
-		Image:     m.containerImage,
-		Name:      "demo-" + hostname,
-		Hostname:  hostname,
-		Port:      port,
-		DBPrefix:  dbPrefix,
-		NetworkID: m.networkID,
-		Labels: map[string]string{
-			"app":      "demo-multiplexer",
-			"hostname": hostname,
-		},
+	var instance *domain.Instance
+
+	// Try CRIU restore first if runtime supports it
+	if criuRuntime, ok := m.runtime.(CRIURuntime); ok && criuRuntime.CRIUAvailable() {
+		restoreOpts := container.RestoreOptions{
+			CheckpointPath: m.checkpointPath,
+			Name:           "demo-" + hostname,
+			Hostname:       hostname,
+			Port:           port,
+			DBPrefix:       dbPrefix,
+			Labels: map[string]string{
+				"app":      "demo-multiplexer",
+				"hostname": hostname,
+			},
+		}
+
+		instance, err = m.runtime.RestoreFromCheckpoint(ctx, restoreOpts)
+		if err != nil {
+			// Log and fall back to cold start
+			log.Printf("CRIU restore failed, falling back to Start(): %v", err)
+			instance = nil // Ensure we fall through to Start()
+		} else {
+			log.Printf("Restored instance from checkpoint: %s (port %d)", instance.ID, port)
+		}
 	}
 
-	instance, err := m.runtime.Start(ctx, opts)
-	if err != nil {
-		// Release the port we allocated
-		_ = m.repo.ReleasePort(ctx, port)
-		return fmt.Errorf("failed to start container: %w", err)
+	// Fallback: Start new container from image
+	if instance == nil {
+		opts := container.StartOptions{
+			Image:     m.containerImage,
+			Name:      "demo-" + hostname,
+			Hostname:  hostname,
+			Port:      port,
+			DBPrefix:  dbPrefix,
+			NetworkID: m.networkID,
+			Labels: map[string]string{
+				"app":      "demo-multiplexer",
+				"hostname": hostname,
+			},
+		}
+
+		instance, err = m.runtime.Start(ctx, opts)
+		if err != nil {
+			// Release the port we allocated
+			_ = m.repo.ReleasePort(ctx, port)
+			return fmt.Errorf("failed to start container: %w", err)
+		}
 	}
 
 	instance.Hostname = hostname
@@ -342,13 +384,17 @@ func (m *PoolManager) cleanupExpired(ctx context.Context) error {
 }
 
 // generateHostname creates a unique hostname for an instance.
+// Uses atomic counter combined with timestamp for guaranteed uniqueness.
 func (m *PoolManager) generateHostname() string {
-	return fmt.Sprintf("demo-%d", time.Now().UnixNano()%1000000000)
+	n := atomic.AddUint64(&instanceCounter, 1)
+	return fmt.Sprintf("demo-%d-%d", time.Now().Unix(), n)
 }
 
 // generateDBPrefix creates a unique database prefix.
+// Uses atomic counter combined with timestamp for guaranteed uniqueness.
 func (m *PoolManager) generateDBPrefix() string {
-	return fmt.Sprintf("d%d_", time.Now().UnixNano()%100000000)
+	n := atomic.AddUint64(&instanceCounter, 1)
+	return fmt.Sprintf("d%d%d_", time.Now().Unix(), n)
 }
 
 // Compile-time check that PoolManager implements Manager

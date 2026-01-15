@@ -21,6 +21,12 @@ var (
 	// ErrCheckpointNotFound is returned when the CRIU checkpoint file doesn't exist.
 	ErrCheckpointNotFound = errors.New("checkpoint not found")
 
+	// ErrCRIUNotAvailable is returned when CRIU is not installed or accessible.
+	ErrCRIUNotAvailable = errors.New("CRIU not available")
+
+	// ErrCRIUVersionUnsupported is returned when CRIU version is too old (requires >= 3.11).
+	ErrCRIUVersionUnsupported = errors.New("CRIU version not supported (requires >= 3.11)")
+
 	// ErrRouteExists is returned when trying to add a route that already exists.
 	ErrRouteExists = errors.New("route already exists")
 
