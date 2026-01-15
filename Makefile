@@ -1,4 +1,4 @@
-.PHONY: all build run test clean dev infra-up infra-down lint clean-demos clean-data clean-all
+.PHONY: all build run test clean dev infra-up infra-down lint clean-demos clean-data clean-all stop
 
 # Build variables
 BINARY_NAME=demo-multiplexer
@@ -68,6 +68,11 @@ fmt:
 tidy:
 	$(GO) mod tidy
 
+# Stop all running server processes
+stop:
+	@pkill -9 -f $(BINARY_NAME) 2>/dev/null || true
+	@echo "Server processes stopped"
+
 # Clean up demo containers (orphans from killed server)
 clean-demos:
 	@docker rm -f $$(docker ps -aq --filter name=demo-demo) 2>/dev/null || true
@@ -78,6 +83,6 @@ clean-data:
 	@docker exec deployments-valkey-1 valkey-cli FLUSHDB 2>/dev/null || true
 	@echo "Valkey data cleaned"
 
-# Clean everything (build artifacts + demos + data)
-clean-all: clean clean-demos clean-data
+# Clean everything (stop server + build artifacts + demos + data)
+clean-all: stop clean clean-demos clean-data
 	@echo "Full cleanup complete"
