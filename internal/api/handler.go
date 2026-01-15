@@ -41,11 +41,12 @@ func (h *Handler) Router() *gin.Engine {
 	r.Use(gin.Logger())
 	r.Use(h.metricsMiddleware())
 
-	// Health check
+	// Health check (public - no auth required)
 	r.GET("/health", h.health)
 
-	// API v1
+	// API v1 (protected - requires API key)
 	v1 := r.Group("/api/v1")
+	v1.Use(APIKeyAuth(h.cfg.Server.APIKey))
 	{
 		// Demo instance endpoints
 		demo := v1.Group("/demo")
@@ -64,12 +65,14 @@ func (h *Handler) Router() *gin.Engine {
 		}
 	}
 
-	// Prometheus metrics
+	// Prometheus metrics (protected - requires API key)
+	metricsGroup := r.Group("")
+	metricsGroup.Use(APIKeyAuth(h.cfg.Server.APIKey))
 	if h.metrics != nil {
-		r.GET("/metrics", gin.WrapH(h.metrics.Handler()))
+		metricsGroup.GET("/metrics", gin.WrapH(h.metrics.Handler()))
 	} else {
 		// Stub handler when metrics is nil (for tests)
-		r.GET("/metrics", func(c *gin.Context) {
+		metricsGroup.GET("/metrics", func(c *gin.Context) {
 			c.String(http.StatusOK, "# metrics disabled\n")
 		})
 	}

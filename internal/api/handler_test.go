@@ -203,9 +203,17 @@ func (m *MockRepository) AddInstance(inst *domain.Instance) {
 	m.instances[inst.ID] = inst
 }
 
-// Helper to create a test handler
+// Helper to create a test handler (no API key - auth disabled)
 func newTestHandler() (*Handler, *MockPoolManager, *MockRepository) {
+	return newTestHandlerWithAPIKey("")
+}
+
+// Helper to create a test handler with a specific API key
+func newTestHandlerWithAPIKey(apiKey string) (*Handler, *MockPoolManager, *MockRepository) {
 	cfg := &config.Config{
+		Server: config.ServerConfig{
+			APIKey: apiKey,
+		},
 		Container: config.ContainerConfig{
 			Mode: "docker",
 		},
@@ -454,6 +462,88 @@ func TestNotFoundRoute(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected status %d for nonexistent route, got %d", http.StatusNotFound, w.Code)
+	}
+}
+
+// Tests for API key authentication on routes
+
+func TestAPIKeyProtectedRoutes_NoKeyConfigured(t *testing.T) {
+	// When no API key is configured, routes should be accessible without auth
+	h, poolMgr, _ := newTestHandler() // empty API key
+	router := h.Router()
+
+	poolMgr.AddInstance(&domain.Instance{
+		ID:        "test-123",
+		Hostname:  "demo-test",
+		Port:      32000,
+		State:     domain.StateReady,
+		CreatedAt: time.Now(),
+	})
+
+	// Test pool stats endpoint
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/v1/pool/stats", nil)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 when no API key configured, got %d", w.Code)
+	}
+}
+
+func TestAPIKeyProtectedRoutes_WithKeyConfigured(t *testing.T) {
+	h, _, _ := newTestHandlerWithAPIKey("test-secret-key")
+	router := h.Router()
+
+	testCases := []struct {
+		name     string
+		method   string
+		path     string
+		apiKey   string
+		wantCode int
+	}{
+		// API v1 routes - should require auth when key is configured
+		{"pool stats without key", "GET", "/api/v1/pool/stats", "", http.StatusUnauthorized},
+		{"pool stats with wrong key", "GET", "/api/v1/pool/stats", "wrong-key", http.StatusUnauthorized},
+		{"pool stats with valid key", "GET", "/api/v1/pool/stats", "test-secret-key", http.StatusOK},
+		{"demo acquire without key", "POST", "/api/v1/demo/acquire", "", http.StatusUnauthorized},
+		{"demo acquire with valid key", "POST", "/api/v1/demo/acquire", "test-secret-key", http.StatusServiceUnavailable}, // 503 because pool is empty
+
+		// Health check - should remain public
+		{"health without key", "GET", "/health", "", http.StatusOK},
+		{"health with key", "GET", "/health", "test-secret-key", http.StatusOK},
+
+		// Metrics - should require auth
+		{"metrics without key", "GET", "/metrics", "", http.StatusUnauthorized},
+		{"metrics with valid key", "GET", "/metrics", "test-secret-key", http.StatusOK},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest(tc.method, tc.path, nil)
+			if tc.apiKey != "" {
+				req.Header.Set("X-API-Key", tc.apiKey)
+			}
+			router.ServeHTTP(w, req)
+
+			if w.Code != tc.wantCode {
+				t.Errorf("expected status %d, got %d (body: %s)", tc.wantCode, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestAPIKeyProtectedRoutes_QueryParam(t *testing.T) {
+	h, _, _ := newTestHandlerWithAPIKey("test-secret-key")
+	router := h.Router()
+
+	// Test using query param instead of header
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/v1/pool/stats?api_key=test-secret-key", nil)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 with valid query param API key, got %d", w.Code)
 	}
 }
 

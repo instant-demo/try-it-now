@@ -29,6 +29,7 @@ type ServerConfig struct {
 	Port         int
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+	APIKey       string
 }
 
 type PoolConfig struct {
@@ -97,6 +98,7 @@ func Load() *Config {
 			Port:         getEnvInt("SERVER_PORT", 8080),
 			ReadTimeout:  getEnvDuration("SERVER_READ_TIMEOUT", 30*time.Second),
 			WriteTimeout: getEnvDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
+			APIKey:       getEnv("API_KEY", ""),
 		},
 		Pool: PoolConfig{
 			TargetSize:         getEnvInt("POOL_TARGET_SIZE", 10),
