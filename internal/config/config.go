@@ -99,7 +99,7 @@ func Load() *Config {
 			Mode:           getEnv("CONTAINER_MODE", "docker"),
 			CheckpointPath: getEnv("CONTAINER_CHECKPOINT_PATH", "/var/lib/checkpoints/prestashop.tar.gz"),
 			Image:          getEnv("CONTAINER_IMAGE", "prestashop/prestashop-flashlight:9.0.0"),
-			Network:        getEnv("CONTAINER_NETWORK", "demo-net"),
+			Network:        getEnv("CONTAINER_NETWORK", ""),
 			PortRangeStart: getEnvInt("CONTAINER_PORT_RANGE_START", 32000),
 			PortRangeEnd:   getEnvInt("CONTAINER_PORT_RANGE_END", 32999),
 		},

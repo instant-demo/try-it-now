@@ -60,8 +60,8 @@ func TestLoad_DefaultValues(t *testing.T) {
 		if cfg.Container.Image != "prestashop/prestashop-flashlight:9.0.0" {
 			t.Errorf("Container.Image = %q, want %q", cfg.Container.Image, "prestashop/prestashop-flashlight:9.0.0")
 		}
-		if cfg.Container.Network != "demo-net" {
-			t.Errorf("Container.Network = %q, want %q", cfg.Container.Network, "demo-net")
+		if cfg.Container.Network != "" {
+			t.Errorf("Container.Network = %q, want %q", cfg.Container.Network, "")
 		}
 		if cfg.Container.PortRangeStart != 32000 {
 			t.Errorf("Container.PortRangeStart = %d, want %d", cfg.Container.PortRangeStart, 32000)
