@@ -30,7 +30,7 @@ type Consumer interface {
 // ProvisionTask represents a request to create a new instance.
 type ProvisionTask struct {
 	TaskID    string    `json:"task_id"`
-	Priority  int       `json:"priority"`   // Higher = more urgent
+	Priority  int       `json:"priority"` // Higher = more urgent
 	CreatedAt time.Time `json:"created_at"`
 }
 

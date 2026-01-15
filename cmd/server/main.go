@@ -15,6 +15,7 @@ import (
 	"github.com/boss/demo-multiplexer/internal/container"
 	"github.com/boss/demo-multiplexer/internal/pool"
 	"github.com/boss/demo-multiplexer/internal/proxy"
+	"github.com/boss/demo-multiplexer/internal/queue"
 	"github.com/boss/demo-multiplexer/internal/store"
 	"github.com/joho/godotenv"
 )
@@ -39,6 +40,38 @@ func main() {
 	if err := repo.InitializePorts(ctx); err != nil {
 		log.Fatalf("Failed to initialize ports: %v", err)
 	}
+
+	// Create NATS Publisher
+	publisher, err := queue.NewNATSPublisher(&cfg.Queue)
+	if err != nil {
+		log.Fatalf("Failed to create NATS publisher: %v", err)
+	}
+	defer publisher.Close()
+	log.Println("Connected to NATS JetStream")
+
+	// Create NATS Consumer with stub handlers
+	// TODO: Replace with real handlers that call poolMgr methods
+	provisionHandler := func(ctx context.Context, task queue.ProvisionTask) error {
+		log.Printf("Provision handler: task=%s priority=%d", task.TaskID, task.Priority)
+		return nil
+	}
+	cleanupHandler := func(ctx context.Context, task queue.CleanupTask) error {
+		log.Printf("Cleanup handler: instance=%s container=%s", task.InstanceID, task.ContainerID)
+		return nil
+	}
+
+	consumer, err := queue.NewNATSConsumer(&cfg.Queue, provisionHandler, cleanupHandler)
+	if err != nil {
+		log.Fatalf("Failed to create NATS consumer: %v", err)
+	}
+	if err := consumer.Start(ctx); err != nil {
+		log.Fatalf("Failed to start NATS consumer: %v", err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		consumer.Stop(stopCtx)
+	}()
 
 	// Create container runtime based on configuration
 	var runtime container.Runtime
