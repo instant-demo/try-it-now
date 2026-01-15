@@ -1,0 +1,21 @@
+{
+	# Enable admin API for dynamic route management
+	admin :2019
+
+	# Local development - no HTTPS
+	auto_https off
+}
+
+# Health check endpoint
+:80 {
+	respond /health "OK" 200
+
+	# Default response for unmatched requests
+	respond "Demo Multiplexer - No route matched" 404
+}
+
+# Demo routes will be added dynamically via the admin API
+# Example route structure (added programmatically):
+# demo-{id}.localhost {
+#     reverse_proxy localhost:{port}
+# }
