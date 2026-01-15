@@ -3,6 +3,7 @@ package pool
 import (
 	"context"
 	"errors"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -551,8 +552,13 @@ func TestPoolManager_GenerateHostname(t *testing.T) {
 		t.Error("generateHostname returned same value twice")
 	}
 
-	if len(hostname1) < 5 {
-		t.Errorf("Hostname too short: %s", hostname1)
+	// Validate UUID format: demo-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+	uuidPattern := regexp.MustCompile(`^demo-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	if !uuidPattern.MatchString(hostname1) {
+		t.Errorf("generateHostname() returned invalid UUID format: %s", hostname1)
+	}
+	if !uuidPattern.MatchString(hostname2) {
+		t.Errorf("generateHostname() returned invalid UUID format: %s", hostname2)
 	}
 }
 
@@ -568,5 +574,14 @@ func TestPoolManager_GenerateDBPrefix(t *testing.T) {
 
 	if prefix1[0] != 'd' || prefix1[len(prefix1)-1] != '_' {
 		t.Errorf("Invalid prefix format: %s", prefix1)
+	}
+
+	// Validate format: d<8 hex chars without dashes>_
+	dbPrefixPattern := regexp.MustCompile(`^d[0-9a-f]{8}_$`)
+	if !dbPrefixPattern.MatchString(prefix1) {
+		t.Errorf("generateDBPrefix() returned invalid format: %s (expected d<8 hex chars>_)", prefix1)
+	}
+	if !dbPrefixPattern.MatchString(prefix2) {
+		t.Errorf("generateDBPrefix() returned invalid format: %s (expected d<8 hex chars>_)", prefix2)
 	}
 }

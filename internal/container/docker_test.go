@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"os"
+	"regexp"
 	"testing"
 	"time"
 
@@ -276,7 +277,12 @@ func TestGenerateInstanceID(t *testing.T) {
 		t.Error("generateInstanceID() returned same ID twice")
 	}
 
-	if len(id1) < 10 {
-		t.Errorf("generateInstanceID() returned too short ID: %s", id1)
+	// Validate UUID format: demo-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+	uuidPattern := regexp.MustCompile(`^demo-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	if !uuidPattern.MatchString(id1) {
+		t.Errorf("generateInstanceID() returned invalid UUID format: %s", id1)
+	}
+	if !uuidPattern.MatchString(id2) {
+		t.Errorf("generateInstanceID() returned invalid UUID format: %s", id2)
 	}
 }

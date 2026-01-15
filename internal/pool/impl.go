@@ -3,8 +3,8 @@ package pool
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/boss/demo-multiplexer/internal/container"
@@ -14,11 +14,8 @@ import (
 	"github.com/boss/demo-multiplexer/internal/proxy"
 	"github.com/boss/demo-multiplexer/internal/store"
 	"github.com/boss/demo-multiplexer/pkg/logging"
+	"github.com/google/uuid"
 )
-
-// instanceCounter provides unique suffixes for hostname/DB prefix generation.
-// Using atomic operations guarantees uniqueness across concurrent calls.
-var instanceCounter uint64
 
 // CRIURuntime is an optional interface for runtimes that support CRIU checkpoint/restore.
 type CRIURuntime interface {
@@ -475,18 +472,17 @@ func (m *PoolManager) cleanupExpired(ctx context.Context) error {
 	return nil
 }
 
-// generateHostname creates a unique hostname for an instance.
-// Uses atomic counter combined with timestamp for guaranteed uniqueness.
+// generateHostname creates a unique hostname for an instance using UUID.
+// UUIDs prevent ID enumeration attacks and information leakage.
 func (m *PoolManager) generateHostname() string {
-	n := atomic.AddUint64(&instanceCounter, 1)
-	return fmt.Sprintf("demo-%d-%d", time.Now().Unix(), n)
+	return fmt.Sprintf("demo-%s", uuid.New().String())
 }
 
-// generateDBPrefix creates a unique database prefix.
-// Uses atomic counter combined with timestamp for guaranteed uniqueness.
+// generateDBPrefix creates a unique database prefix using UUID.
+// Uses first 8 chars of UUID for database compatibility.
 func (m *PoolManager) generateDBPrefix() string {
-	n := atomic.AddUint64(&instanceCounter, 1)
-	return fmt.Sprintf("d%d%d_", time.Now().Unix(), n)
+	id := uuid.New().String()
+	return fmt.Sprintf("d%s_", strings.ReplaceAll(id[:8], "-", ""))
 }
 
 // Compile-time check that PoolManager implements Manager
