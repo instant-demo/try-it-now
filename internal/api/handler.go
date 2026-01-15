@@ -351,7 +351,14 @@ func (h *Handler) extendDemo(c *gin.Context) {
 	}
 
 	// Get updated instance
-	instance, _ = h.store.GetInstance(ctx, id)
+	instance, err = h.store.GetInstance(ctx, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error: "Failed to retrieve updated instance",
+			Code:  "INTERNAL_ERROR",
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":            instance.ID,
