@@ -359,7 +359,8 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 
 		instance, err = m.runtime.Start(ctx, opts)
 		if err != nil {
-			// Release the port we allocated
+			// Release port back to pool. Error ignored because we're already in failure
+			// path and port will be reclaimed on next pool initialization.
 			_ = m.repo.ReleasePort(ctx, port)
 			if m.metrics != nil {
 				m.metrics.ProvisionsTotal.WithLabelValues(method, "failure").Inc()
@@ -373,7 +374,9 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 
 	// Wait for container to be ready
 	if err := m.waitForReady(ctx, instance); err != nil {
-		// Clean up on failure
+		// Best-effort cleanup during provision failure. Container stop may fail if
+		// container is in bad state, and port release failure is acceptable since
+		// pool reinitializes available ports on startup.
 		_ = m.runtime.Stop(ctx, instance.ContainerID)
 		_ = m.repo.ReleasePort(ctx, port)
 		if m.metrics != nil {
@@ -387,7 +390,9 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 
 	// Add to pool
 	if err := m.repo.AddToPool(ctx, instance); err != nil {
-		// Clean up on failure
+		// Best-effort cleanup during provision failure. Container stop may fail if
+		// container is in bad state, and port release failure is acceptable since
+		// pool reinitializes available ports on startup.
 		_ = m.runtime.Stop(ctx, instance.ContainerID)
 		_ = m.repo.ReleasePort(ctx, port)
 		if m.metrics != nil {
