@@ -30,6 +30,7 @@ A warm-pool provisioning system that eliminates container startup latency. Pre-w
 
 - **SaaS trials** - Instant product demos for prospect conversion
 - **E-commerce platforms** - PrestaShop, WooCommerce, Magento trials
+- **Marketplace demos** - Plugin/theme/module showcases (PrestaShop addons, WooCommerce extensions)
 - **Development sandboxes** - Isolated test environments
 - **Training environments** - Pre-configured learning instances
 - **CI/CD preview** - Branch-specific demo deployments
