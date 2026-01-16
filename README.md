@@ -1,8 +1,12 @@
 # Try It Now
 
-**Every app deserves a Try It Now button.**
+**Every repo deserves a Try It Now button.**
 
-> Instant application provisioning. Sub-20ms on-demand instances from warm pool.
+[![Try It Now](https://img.shields.io/badge/Try_It_Now-00C853?style=for-the-badge&logo=rocket&logoColor=white)](https://github.com/instant-demo/try-it-now)
+
+> Add this to any repo. One click → instant running demo.
+
+Instant application provisioning. Sub-20ms on-demand instances from warm pool.
 
 A warm-pool provisioning system that eliminates container startup latency. Pre-warm any containerized application and serve instances on-demand via O(1) queue operations.
 
