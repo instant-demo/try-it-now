@@ -20,7 +20,7 @@ A warm-pool provisioning system that eliminates container startup latency. Pre-w
 
 ## Features
 
-- **Instant provisioning** - Sub-500ms instance acquisition from warm pool
+- **Instant provisioning** - Sub-20ms instance acquisition from warm pool
 - **API key authentication** - Secure access with `X-API-Key` header
 - **Request tracing** - `X-Request-ID` header for distributed tracing
 - **Rate limiting** - Configurable hourly/daily limits per IP
