@@ -310,7 +310,7 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 			Port:           port,
 			DBPrefix:       dbPrefix,
 			Labels: map[string]string{
-				"app":      "demo-multiplexer",
+				"app":      "try-it-now",
 				"hostname": hostname,
 			},
 		}
@@ -352,7 +352,7 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 			DBPrefix:  dbPrefix,
 			NetworkID: m.networkID,
 			Labels: map[string]string{
-				"app":      "demo-multiplexer",
+				"app":      "try-it-now",
 				"hostname": hostname,
 			},
 		}

@@ -93,7 +93,7 @@ func TestPodmanRuntime_StartAndStop(t *testing.T) {
 		Port:     32150,
 		DBPrefix: "test_",
 		Labels: map[string]string{
-			"app": "demo-multiplexer-test",
+			"app": "try-it-now-test",
 		},
 	}
 

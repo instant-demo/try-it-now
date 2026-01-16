@@ -80,7 +80,7 @@ func TestDockerRuntime_StartAndStop(t *testing.T) {
 		Port:     31050,
 		DBPrefix: "test_",
 		Labels: map[string]string{
-			"app": "demo-multiplexer-test",
+			"app": "try-it-now-test",
 		},
 	}
 

@@ -330,7 +330,7 @@ services:
 
 ---
 
-## 7. Implementation Checklist for Demo Multiplexer
+## 7. Implementation Checklist for Try It Now
 
 ### Phase 1: Checkpoint Creation
 - [ ] Start prestashop-flashlight:9.0.0 with template configuration

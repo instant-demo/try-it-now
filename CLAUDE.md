@@ -21,7 +21,7 @@ make infra-logs        # Stream infrastructure logs
 
 # Development
 make dev               # Run with Docker backend (CONTAINER_MODE=docker)
-make build             # Compile to build/demo-multiplexer
+make build             # Compile to build/try-it-now
 make run               # Build + execute
 
 # Testing

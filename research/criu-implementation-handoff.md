@@ -1,8 +1,8 @@
 # CRIU Implementation Handoff Document
 
-## PrestaShop CRIU Checkpoint Feature for Demo Multiplexer
+## PrestaShop CRIU Checkpoint Feature for Try It Now
 
-**Task ID:** `demo-multi-plexer-989`
+**Task ID:** `try-it-now-989`
 **Status:** Research Complete - Ready for Implementation
 **Prepared for:** New Claude Code Session
 **Date:** 2026-01-16
@@ -11,7 +11,7 @@
 
 ## Executive Summary
 
-This document provides complete implementation instructions for adding PrestaShop CRIU checkpoint/restore support to the Demo Multiplexer. The system currently has a working CRIU infrastructure in `internal/container/podman.go`, but lacks the critical post-restore database operations needed to make PrestaShop functional after restoration.
+This document provides complete implementation instructions for adding PrestaShop CRIU checkpoint/restore support to the Try It Now. The system currently has a working CRIU infrastructure in `internal/container/podman.go`, but lacks the critical post-restore database operations needed to make PrestaShop functional after restoration.
 
 **Key Implementation Gaps:**
 1. No database package exists to update PrestaShop domain configuration after CRIU restore
@@ -59,10 +59,10 @@ This document provides complete implementation instructions for adding PrestaSho
 
 ```bash
 # 1. Review the task
-bd show demo-multi-plexer-989
+bd show try-it-now-989
 
 # 2. Start working on the task
-bd update demo-multi-plexer-989 --status=in_progress
+bd update try-it-now-989 --status=in_progress
 
 # 3. Read the research
 cat research/prestashop-flashlight-deep-dive.md
@@ -74,7 +74,7 @@ cat research/prestashop-flashlight-deep-dive.md
 
 ## Research Documents
 
-All research is located in `/Users/boss/dev/demo-multi-plexer/research/`:
+All research is located in `/Users/boss/dev/try-it-now/research/`:
 
 | Document | Purpose |
 |----------|---------|
@@ -99,7 +99,7 @@ import (
     "fmt"
     "strings"
 
-    "github.com/boss/demo-multiplexer/internal/config"
+    "github.com/boss/try-it-now/internal/config"
     _ "github.com/go-sql-driver/mysql"
 )
 
@@ -306,7 +306,7 @@ if m.psDB != nil && instance.DBPrefix != "" {
 1. **Add import**:
 ```go
 import (
-    "github.com/boss/demo-multiplexer/internal/database"
+    "github.com/boss/try-it-now/internal/database"
 )
 ```
 
@@ -553,7 +553,7 @@ DROP TABLE IF EXISTS {table1}, {table2}, ...;
 3. `make test` passes
 4. `make lint` passes
 5. Checkpoint creation documented
-6. Issue `demo-multi-plexer-989` closed with summary comment
+6. Issue `try-it-now-989` closed with summary comment
 
 ---
 
@@ -561,6 +561,6 @@ DROP TABLE IF EXISTS {table1}, {table2}, ...;
 
 ```bash
 # When implementation is complete:
-bd close demo-multi-plexer-989 --reason="Implemented CRIU checkpoint with post-restore domain config and table cleanup"
+bd close try-it-now-989 --reason="Implemented CRIU checkpoint with post-restore domain config and table cleanup"
 bd sync --flush-only
 ```

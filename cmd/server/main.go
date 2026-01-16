@@ -34,7 +34,7 @@ func main() {
 	// Initialize metrics collector
 	metricsCollector := metrics.NewCollector()
 
-	logger.Info("Starting Demo Multiplexer", "mode", cfg.Container.Mode)
+	logger.Info("Starting Try It Now", "mode", cfg.Container.Mode)
 
 	// Create Valkey repository
 	repo, err := store.NewValkeyRepository(&cfg.Store, &cfg.Container)

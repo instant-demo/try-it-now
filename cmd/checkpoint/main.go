@@ -1,7 +1,7 @@
 // Command checkpoint creates a CRIU checkpoint of a PrestaShop container for fast restore.
 //
 // This tool is designed to run on a Linux host with Podman and CRIU installed.
-// The generated checkpoint can be used by the demo-multiplexer to instantly provision
+// The generated checkpoint can be used by the try-it-now to instantly provision
 // new PrestaShop instances via CRIU restore instead of cold-starting containers.
 //
 // Usage:
