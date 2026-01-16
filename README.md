@@ -1,8 +1,8 @@
-# PrestaShop Demo Multiplexer
+# Demo Multiplexer
 
-> Instant PrestaShop trial instances. Sub-20ms acquisition from warm pool.
+> Instant application provisioning. Sub-20ms on-demand instances from warm pool.
 
-A warm-pool provisioning system that eliminates container startup latency by pre-warming instances and serving them on-demand via O(1) queue operations.
+A warm-pool provisioning system that eliminates container startup latency. Pre-warm any containerized application and serve instances on-demand via O(1) queue operations.
 
 ## Benchmarks
 
@@ -25,6 +25,14 @@ A warm-pool provisioning system that eliminates container startup latency by pre
 - **Prometheus metrics** - Full observability at `/metrics`
 - **Graceful shutdown** - Proper cleanup of all resources
 - **Security hardened** - Localhost-only bindings, trusted proxy config
+
+## Use Cases
+
+- **SaaS trials** - Instant product demos for prospect conversion
+- **E-commerce platforms** - PrestaShop, WooCommerce, Magento trials
+- **Development sandboxes** - Isolated test environments
+- **Training environments** - Pre-configured learning instances
+- **CI/CD preview** - Branch-specific demo deployments
 
 ## Quick Start
 
@@ -79,7 +87,7 @@ All `/api/v1/*` endpoints require `X-API-Key` header when `API_KEY` is configure
 - **Valkey 8** (Redis-compatible state store)
 - **Docker** (container runtime, Podman+CRIU supported)
 - **Caddy 2** (dynamic reverse proxy)
-- **MariaDB 10.11** (shared PrestaShop database)
+- **MariaDB 10.11** (optional, for stateful applications)
 - **NATS JetStream** (async message queue)
 
 ## Installation
@@ -107,7 +115,7 @@ demo-multiplexer
 - **Valkey/Redis** - State persistence
 - **Caddy 2** - Reverse proxy with admin API enabled
 - **Docker or Podman** - Container runtime
-- **MariaDB** - PrestaShop database
+- **MariaDB** - Database for stateful apps (optional)
 - **NATS** - Message queue (optional)
 
 See `deployments/docker-compose.yml` for reference infrastructure setup.
@@ -151,6 +159,37 @@ See [CLAUDE.md](./CLAUDE.md) for architecture details and coding conventions.
 ## Known Limitations
 
 - **Queue handlers** - NATS provision/cleanup handlers are stubs. Provisioning currently uses synchronous pool replenishment. Queue-based async provisioning is planned.
+
+## Roadmap
+
+**Analytics & Insights**
+- Demo engagement tracking (session duration, feature usage)
+- Conversion funnel metrics
+- PostHog/Umami integration
+
+**Management & Operations**
+- TUI dashboard for pool monitoring
+- Admin API for fleet management
+- Multi-tenant support
+
+**Platform Integrations**
+- Pocketbase backend provisioning
+- Encore.dev distributed system demos
+- SST one-click cloud deployment
+- Coolify self-hosted PaaS mode
+
+**Infrastructure**
+- Kubernetes operator
+- Terraform provider
+- ARM64 support
+
+## Built With
+
+- **[Valkey](https://valkey.io)** - Redis-compatible state store (pool queue, rate limiting)
+- **[Caddy](https://caddyserver.com)** - Automatic HTTPS reverse proxy
+- **[NATS JetStream](https://nats.io)** - Async message queue for provisioning
+- **[CRIU](https://criu.org)** - Checkpoint/restore for instant container startup (Podman)
+- **[Gin](https://gin-gonic.com)** - High-performance HTTP framework
 
 ## License
 
