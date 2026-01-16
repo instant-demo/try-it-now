@@ -1,0 +1,28 @@
+[Unit]
+Description=Try It Now - Demo Provisioning System
+Documentation=https://github.com/instant-demo/try-it-now
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=edosh
+Group=edosh
+WorkingDirectory=/home/edosh/projects/try-it-now
+ExecStart=/home/edosh/projects/try-it-now/build/try-it-now
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment file
+EnvironmentFile=/home/edosh/projects/try-it-now/.env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/edosh/projects/try-it-now
+
+[Install]
+WantedBy=multi-user.target

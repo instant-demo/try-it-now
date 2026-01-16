@@ -1,0 +1,36 @@
+{
+	# Enable admin API for dynamic route management
+	admin :2019
+
+	# Production: automatic HTTPS via Let's Encrypt
+	email admin@migration-pro.com
+}
+
+# Main API endpoint
+demo.migration-pro.com {
+	# Health check
+	handle /health {
+		respond "OK" 200
+	}
+
+	# API routes - proxy to Go application
+	handle /api/* {
+		reverse_proxy localhost:8080
+	}
+
+	handle /metrics {
+		reverse_proxy localhost:8080
+	}
+
+	# Default response
+	handle {
+		respond "Try It Now - Demo Provisioning System" 200
+	}
+}
+
+# Wildcard for dynamic demo subdomains
+*.demo.migration-pro.com {
+	# These routes are managed dynamically via admin API
+	# Fallback for unmatched subdomains
+	respond "Demo not found or expired" 404
+}

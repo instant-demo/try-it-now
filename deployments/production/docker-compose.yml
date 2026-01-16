@@ -1,0 +1,78 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:2019:2019"  # Admin API: localhost only
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - demo-net
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--requirepass", "${VALKEY_PASSWORD}"]
+    ports:
+      - "127.0.0.1:6379:6379"  # Localhost only
+    volumes:
+      - valkey_data:/data
+    networks:
+      - demo-net
+    healthcheck:
+      test: ["CMD", "valkey-cli", "-a", "${VALKEY_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  nats:
+    image: nats:2-alpine
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data"]
+    ports:
+      - "127.0.0.1:4222:4222"  # Localhost only
+      - "127.0.0.1:8222:8222"
+    volumes:
+      - nats_data:/data
+    networks:
+      - demo-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  mariadb:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${PS_DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${PS_DB_NAME}
+      MYSQL_USER: ${PS_DB_USER}
+      MYSQL_PASSWORD: ${PS_DB_PASSWORD}
+    ports:
+      - "127.0.0.1:3306:3306"  # Localhost only
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    networks:
+      - demo-net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  demo-net:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
+  valkey_data:
+  nats_data:
+  mariadb_data:
