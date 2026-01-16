@@ -6,6 +6,11 @@
 
 > Add this to any repo. One click → instant running demo.
 
+| Button | What it does |
+|--------|-------------|
+| ☕ Buy Me a Coffee | One click → donate |
+| 🚀 **Try It Now** | One click → running demo |
+
 Instant application provisioning. Sub-20ms on-demand instances from warm pool.
 
 A warm-pool provisioning system that eliminates container startup latency. Pre-warm any containerized application and serve instances on-demand via O(1) queue operations.
