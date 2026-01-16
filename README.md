@@ -1,4 +1,6 @@
-# Demo Multiplexer
+# Try It Now
+
+**Every app deserves a Try It Now button.**
 
 > Instant application provisioning. Sub-20ms on-demand instances from warm pool.
 
@@ -101,15 +103,15 @@ All `/api/v1/*` endpoints require `X-API-Key` header when `API_KEY` is configure
 make build
 
 # Copy binary and config
-cp build/demo-multiplexer /usr/local/bin/
-cp .env.example /etc/demo-multiplexer/.env
-chmod 600 /etc/demo-multiplexer/.env
+cp build/try-it-now /usr/local/bin/
+cp .env.example /etc/try-it-now/.env
+chmod 600 /etc/try-it-now/.env
 
 # Edit config (set API_KEY, TRUSTED_PROXIES, database credentials)
-vim /etc/demo-multiplexer/.env
+vim /etc/try-it-now/.env
 
 # Run (systemd unit in deployments/systemd/)
-demo-multiplexer
+try-it-now
 ```
 
 ### Infrastructure Requirements
@@ -128,7 +130,7 @@ See `deployments/docker-compose.yml` for reference infrastructure setup.
 make test              # Run unit tests (79 tests)
 make test-coverage     # Generate coverage HTML report
 make lint              # Run golangci-lint
-make build             # Compile to build/demo-multiplexer
+make build             # Compile to build/try-it-now
 make clean-all         # Full cleanup
 
 # Integration tests (requires infrastructure)

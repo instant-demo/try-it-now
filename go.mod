@@ -1,4 +1,4 @@
-module github.com/boss/demo-multiplexer
+module github.com/instant-demo/try-it-now
 
 go 1.25.5
 

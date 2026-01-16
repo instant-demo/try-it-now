@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PrestaShop Demo Multiplexer - An instant-provisioning system for PrestaShop e-commerce trial instances. Uses warm pool architecture to achieve sub-500ms perceived startup by pre-warming containerized instances and assigning them on-demand.
+Try It Now - An instant-provisioning system for any containerized application. Uses warm pool architecture to achieve sub-20ms acquisition by pre-warming instances and assigning them on-demand. Every app deserves a Try It Now button.
 
 **Status:** Phase 2 complete - production-ready with authentication, security hardening, and comprehensive test coverage.
 

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/boss/demo-multiplexer/pkg/logging"
+	"github.com/instant-demo/try-it-now/pkg/logging"
 )
 
 // HealthCheckConfig contains configuration for container health checks.

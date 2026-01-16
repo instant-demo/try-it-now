@@ -1,7 +1,7 @@
 .PHONY: all build run test test-e2e clean dev infra-up infra-down lint clean-demos clean-data clean-all stop
 
 # Build variables
-BINARY_NAME=demo-multiplexer
+BINARY_NAME=try-it-now
 BUILD_DIR=build
 GO=go
 

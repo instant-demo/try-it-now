@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boss/demo-multiplexer/internal/container"
-	"github.com/boss/demo-multiplexer/internal/domain"
-	"github.com/boss/demo-multiplexer/internal/proxy"
-	"github.com/boss/demo-multiplexer/pkg/logging"
+	"github.com/instant-demo/try-it-now/internal/container"
+	"github.com/instant-demo/try-it-now/internal/domain"
+	"github.com/instant-demo/try-it-now/internal/proxy"
+	"github.com/instant-demo/try-it-now/pkg/logging"
 )
 
 // MockRepository implements store.Repository for testing.

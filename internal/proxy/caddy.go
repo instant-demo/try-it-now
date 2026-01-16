@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/boss/demo-multiplexer/internal/config"
-	"github.com/boss/demo-multiplexer/internal/domain"
-	"github.com/boss/demo-multiplexer/internal/metrics"
+	"github.com/instant-demo/try-it-now/internal/config"
+	"github.com/instant-demo/try-it-now/internal/domain"
+	"github.com/instant-demo/try-it-now/internal/metrics"
 )
 
 // CaddyRouteManager implements RouteManager using the Caddy admin API.

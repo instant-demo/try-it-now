@@ -7,13 +7,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boss/demo-multiplexer/internal/container"
-	"github.com/boss/demo-multiplexer/internal/database"
-	"github.com/boss/demo-multiplexer/internal/domain"
-	"github.com/boss/demo-multiplexer/internal/metrics"
-	"github.com/boss/demo-multiplexer/internal/proxy"
-	"github.com/boss/demo-multiplexer/internal/store"
-	"github.com/boss/demo-multiplexer/pkg/logging"
+	"github.com/instant-demo/try-it-now/internal/container"
+	"github.com/instant-demo/try-it-now/internal/database"
+	"github.com/instant-demo/try-it-now/internal/domain"
+	"github.com/instant-demo/try-it-now/internal/metrics"
+	"github.com/instant-demo/try-it-now/internal/proxy"
+	"github.com/instant-demo/try-it-now/internal/store"
+	"github.com/instant-demo/try-it-now/pkg/logging"
 	"github.com/google/uuid"
 )
 

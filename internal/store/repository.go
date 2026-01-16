@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/instant-demo/try-it-now/internal/domain"
 )
 
 // InstanceStore handles instance CRUD operations.

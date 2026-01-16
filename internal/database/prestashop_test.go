@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boss/demo-multiplexer/internal/config"
+	"github.com/instant-demo/try-it-now/internal/config"
 )
 
 // skipIfNoMariaDB skips the test if PS_DB_TEST is not set or MariaDB is not available.

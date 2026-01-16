@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boss/demo-multiplexer/internal/config"
-	"github.com/boss/demo-multiplexer/pkg/logging"
+	"github.com/instant-demo/try-it-now/internal/config"
+	"github.com/instant-demo/try-it-now/pkg/logging"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )

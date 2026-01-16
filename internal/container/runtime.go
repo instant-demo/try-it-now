@@ -3,7 +3,7 @@ package container
 import (
 	"context"
 
-	"github.com/boss/demo-multiplexer/internal/domain"
+	"github.com/instant-demo/try-it-now/internal/domain"
 )
 
 // Runtime defines the interface for container operations.

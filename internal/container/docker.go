@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/boss/demo-multiplexer/internal/config"
-	"github.com/boss/demo-multiplexer/internal/domain"
-	"github.com/boss/demo-multiplexer/pkg/logging"
+	"github.com/instant-demo/try-it-now/internal/config"
+	"github.com/instant-demo/try-it-now/internal/domain"
+	"github.com/instant-demo/try-it-now/pkg/logging"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"

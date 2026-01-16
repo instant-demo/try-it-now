@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/boss/demo-multiplexer/internal/config"
+	"github.com/instant-demo/try-it-now/internal/config"
 	_ "github.com/go-sql-driver/mysql"
 )
 
