@@ -1,8 +1,45 @@
 # Production Deployment Handoff
 
+## Current Blocking Issue (2026-01-17)
+
+### Database Isolation Bug - ALL containers share same PS_DOMAIN
+
+**Symptom:** All demo containers redirect to the SAME domain (the last one started), regardless of which subdomain you access.
+
+**Root Cause:** PrestaShop stores its domain in the database (`ps_configuration` or `ps_shop_url` tables). When multiple containers share the same MariaDB database WITHOUT table prefix isolation, the last container to start overwrites the domain config for ALL instances.
+
+**Evidence:**
+```bash
+# Container A (demo-371eede4-...) has PS_DOMAIN env var set correctly
+docker inspect demo-demo-371eede4-... | grep PS_DOMAIN
+# Returns: PS_DOMAIN=demo-371eede4-....demo.migration-pro.com
+
+# But when you curl it, it redirects to container B's domain
+curl -sI http://localhost:32107/ | grep Location
+# Returns: Location: http://demo-ff02474c-....demo.migration-pro.com/
+
+# Container B (demo-ff02474c-...) was the last one started
+# ALL containers redirect to its domain
+```
+
+**The Fix Required:**
+Each container needs its own isolated database tables. Options:
+1. **Table prefix isolation** - Use unique DB_PREFIX per container (prestashop-flashlight may support this)
+2. **Separate databases** - Create a new database per container (not scalable)
+3. **Single-tenant mode** - Only run ONE demo at a time (defeats the purpose)
+
+**Code location:** Check `internal/pool/impl.go` - there IS a `dbPrefix` being generated but it's not being used correctly for PrestaShop table isolation.
+
+**Files to investigate:**
+- `internal/container/docker.go:buildEnvVars()` - How env vars are passed
+- Check if prestashop-flashlight supports `DB_PREFIX` or similar env var
+- The dump restoration in prestashop-flashlight's `/run.sh`
+
+---
+
 ## Session Summary (2026-01-17)
 
-First production deployment attempt to Hetzner server (Ubuntu 24.04). **MySQL SSL issue resolved** by upgrading to MariaDB 11.4.
+MariaDB 11.4 SSL issue RESOLVED. Production deployment WORKING except for the database isolation bug above.
 
 ## Server Details
 
