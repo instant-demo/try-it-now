@@ -242,15 +242,15 @@ func TestBuildEnvVars(t *testing.T) {
 	env := runtime.buildEnvVars(opts)
 
 	expected := map[string]bool{
-		"PS_DOMAIN=demo-abc.example.com":      true,
-		"MYSQL_HOST=db.example.com":           true,
-		"MYSQL_PORT=3306":                     true,
-		"MYSQL_DATABASE=testdb":               true,
-		"MYSQL_USER=testuser":                 true,
-		"MYSQL_PASSWORD=testpass":             true,
-		"ADMIN_MAIL_OVERRIDE=demo@test.com":   true,
-		"ADMIN_PASSWORD_OVERRIDE=demopass":    true,
-		"CUSTOM_VAR=custom_value":             true,
+		"PS_DOMAIN=demo-abc.example.com":    true,
+		"MYSQL_HOST=db.example.com":         true,
+		"MYSQL_PORT=3306":                   true,
+		"MYSQL_DATABASE=testdb":             true,
+		"MYSQL_USER=testuser":               true,
+		"MYSQL_PASSWORD=testpass":           true,
+		"ADMIN_MAIL_OVERRIDE=demo@test.com": true,
+		"ADMIN_PASSWORD_OVERRIDE=demopass":  true,
+		"CUSTOM_VAR=custom_value":           true,
 	}
 
 	for _, e := range env {

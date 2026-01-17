@@ -24,6 +24,9 @@ type Instance struct {
 	CreatedAt   time.Time     `json:"created_at"`
 	AssignedAt  *time.Time    `json:"assigned_at,omitempty"`
 	ExpiresAt   *time.Time    `json:"expires_at,omitempty"`
+	// ExpiresAtUnix stores the expiry as Unix timestamp for atomic Lua operations.
+	// This is the source of truth for TTL calculations when set.
+	ExpiresAtUnix int64 `json:"expires_at_unix,omitempty"`
 }
 
 // URL returns the public URL for this instance.
@@ -38,6 +41,10 @@ func (i *Instance) AdminURL(baseDomain, adminPath string) string {
 
 // IsExpired returns true if the instance has passed its expiry time.
 func (i *Instance) IsExpired() bool {
+	// Use ExpiresAtUnix as source of truth if set
+	if i.ExpiresAtUnix > 0 {
+		return time.Now().Unix() > i.ExpiresAtUnix
+	}
 	if i.ExpiresAt == nil {
 		return false
 	}
@@ -46,6 +53,14 @@ func (i *Instance) IsExpired() bool {
 
 // TTLRemaining returns the remaining time until expiry.
 func (i *Instance) TTLRemaining() time.Duration {
+	// Use ExpiresAtUnix as source of truth if set
+	if i.ExpiresAtUnix > 0 {
+		remaining := time.Until(time.Unix(i.ExpiresAtUnix, 0))
+		if remaining < 0 {
+			return 0
+		}
+		return remaining
+	}
 	if i.ExpiresAt == nil {
 		return 0
 	}

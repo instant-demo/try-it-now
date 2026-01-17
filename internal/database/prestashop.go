@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/instant-demo/try-it-now/internal/config"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/instant-demo/try-it-now/internal/config"
 )
 
 // ValidPrefixPattern matches valid database prefixes: 'd' + 8 hex chars + '_'

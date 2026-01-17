@@ -52,9 +52,9 @@ type CheckpointMetadata struct {
 	Host string `json:"host,omitempty"`
 
 	// Database configuration (sanitized - no passwords)
-	DBHost     string `json:"db_host,omitempty"`
-	DBName     string `json:"db_name,omitempty"`
-	DBPrefix   string `json:"db_prefix,omitempty"`
+	DBHost   string `json:"db_host,omitempty"`
+	DBName   string `json:"db_name,omitempty"`
+	DBPrefix string `json:"db_prefix,omitempty"`
 }
 
 type config struct {
@@ -249,9 +249,9 @@ func warmCaches(port int) {
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	pages := []string{
-		"/",                    // Homepage
+		"/",                      // Homepage
 		"/en/2-home-accessories", // Category page (may 404, that's ok)
-		"/en/",                 // Alternative homepage
+		"/en/",                   // Alternative homepage
 	}
 
 	for _, page := range pages {

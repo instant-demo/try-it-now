@@ -896,3 +896,270 @@ func TestValkeyRepository_AcquireFromPool_MissingInstance(t *testing.T) {
 		t.Errorf("AcquireFromPool() ID = %v, want %v", got.ID, validInstance.ID)
 	}
 }
+
+// TestValkeyRepository_CheckAndIncrementRateLimit tests the atomic rate limit operation.
+func TestValkeyRepository_CheckAndIncrementRateLimit(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+	testIP := "192.168.1.200"
+
+	// First request should be allowed
+	allowed, err := repo.CheckAndIncrementRateLimit(ctx, testIP, 3, 5)
+	if err != nil {
+		t.Fatalf("CheckAndIncrementRateLimit() error = %v", err)
+	}
+	if !allowed {
+		t.Error("First request should be allowed")
+	}
+
+	// Second and third requests should be allowed
+	for i := 2; i <= 3; i++ {
+		allowed, err = repo.CheckAndIncrementRateLimit(ctx, testIP, 3, 5)
+		if err != nil {
+			t.Fatalf("CheckAndIncrementRateLimit() request %d error = %v", i, err)
+		}
+		if !allowed {
+			t.Errorf("Request %d should be allowed", i)
+		}
+	}
+
+	// Fourth request should be denied (hourly limit = 3)
+	allowed, err = repo.CheckAndIncrementRateLimit(ctx, testIP, 3, 5)
+	if err != nil {
+		t.Fatalf("CheckAndIncrementRateLimit() fourth request error = %v", err)
+	}
+	if allowed {
+		t.Error("Fourth request should be denied (hourly limit exceeded)")
+	}
+
+	// Verify the counter wasn't incremented for the denied request
+	hourKey := keyRateLimitHour + testIP
+	count, err := repo.client.Do(ctx, repo.client.B().Get().Key(hourKey).Build()).AsInt64()
+	if err != nil {
+		t.Fatalf("Failed to get hourly count: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("Hourly count = %d, want 3 (denied request shouldn't increment)", count)
+	}
+}
+
+// TestValkeyRepository_CheckAndIncrementRateLimit_Concurrent tests that concurrent rate
+// limit checks correctly enforce limits atomically. This verifies the fix for try-it-now-7eg.
+func TestValkeyRepository_CheckAndIncrementRateLimit_Concurrent(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+	testIP := "192.168.1.201"
+	const hourlyLimit = 5
+	const dailyLimit = 10
+	const numGoroutines = 20 // More than the limit
+
+	var wg sync.WaitGroup
+	var allowedCount atomic.Int32
+	var deniedCount atomic.Int32
+
+	// Launch concurrent requests
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			allowed, err := repo.CheckAndIncrementRateLimit(ctx, testIP, hourlyLimit, dailyLimit)
+			if err != nil {
+				t.Logf("CheckAndIncrementRateLimit error: %v", err)
+				return
+			}
+			if allowed {
+				allowedCount.Add(1)
+			} else {
+				deniedCount.Add(1)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Exactly hourlyLimit requests should be allowed
+	if allowedCount.Load() != int32(hourlyLimit) {
+		t.Errorf("Allowed count = %d, want %d (atomic rate limiting failed)", allowedCount.Load(), hourlyLimit)
+	}
+
+	// The rest should be denied
+	expectedDenied := int32(numGoroutines - hourlyLimit)
+	if deniedCount.Load() != expectedDenied {
+		t.Errorf("Denied count = %d, want %d", deniedCount.Load(), expectedDenied)
+	}
+
+	// Verify the final counter value
+	hourKey := keyRateLimitHour + testIP
+	count, err := repo.client.Do(ctx, repo.client.B().Get().Key(hourKey).Build()).AsInt64()
+	if err != nil {
+		t.Fatalf("Failed to get hourly count: %v", err)
+	}
+	if count != int64(hourlyLimit) {
+		t.Errorf("Final hourly count = %d, want %d", count, hourlyLimit)
+	}
+}
+
+// TestValkeyRepository_ExtendInstanceTTLAtomic tests the atomic TTL extension.
+func TestValkeyRepository_ExtendInstanceTTLAtomic(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	// Create an instance with TTL
+	instance := &domain.Instance{
+		ID:        "ttl-atomic-test-1",
+		Hostname:  "demo-ttl-atomic",
+		Port:      32200,
+		State:     domain.StateAssigned,
+		CreatedAt: time.Now(),
+	}
+
+	if err := repo.SaveInstance(ctx, instance); err != nil {
+		t.Fatalf("SaveInstance() error = %v", err)
+	}
+
+	// Set initial TTL (this sets ExpiresAtUnix)
+	if err := repo.SetInstanceTTL(ctx, instance.ID, 30*time.Minute); err != nil {
+		t.Fatalf("SetInstanceTTL() error = %v", err)
+	}
+
+	// Extend TTL - should succeed
+	result, err := repo.ExtendInstanceTTLAtomic(ctx, instance.ID, 10*time.Minute, 60*time.Minute)
+	if err != nil {
+		t.Fatalf("ExtendInstanceTTLAtomic() error = %v", err)
+	}
+	if !result.Success {
+		t.Error("ExtendInstanceTTLAtomic() should succeed")
+	}
+
+	// Verify the new TTL is approximately 40 minutes
+	got, err := repo.GetInstance(ctx, instance.ID)
+	if err != nil {
+		t.Fatalf("GetInstance() error = %v", err)
+	}
+	remaining := got.TTLRemaining()
+	if remaining < 39*time.Minute || remaining > 41*time.Minute {
+		t.Errorf("TTL remaining = %v, want ~40 minutes", remaining)
+	}
+
+	// Try to extend beyond max TTL - should fail
+	result, err = repo.ExtendInstanceTTLAtomic(ctx, instance.ID, 30*time.Minute, 60*time.Minute)
+	if err != domain.ErrMaxTTLExceeded {
+		t.Errorf("ExtendInstanceTTLAtomic() should return ErrMaxTTLExceeded, got %v", err)
+	}
+	if result != nil && result.Success {
+		t.Error("ExtendInstanceTTLAtomic() should not succeed when exceeding max TTL")
+	}
+
+	// Verify TTL wasn't extended
+	got, err = repo.GetInstance(ctx, instance.ID)
+	if err != nil {
+		t.Fatalf("GetInstance() error = %v", err)
+	}
+	remaining = got.TTLRemaining()
+	if remaining < 39*time.Minute || remaining > 41*time.Minute {
+		t.Errorf("TTL remaining after failed extend = %v, should still be ~40 minutes", remaining)
+	}
+}
+
+// TestValkeyRepository_ExtendInstanceTTLAtomic_NotFound tests the atomic TTL extension
+// with a non-existent instance.
+func TestValkeyRepository_ExtendInstanceTTLAtomic_NotFound(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	_, err := repo.ExtendInstanceTTLAtomic(ctx, "nonexistent-instance", 10*time.Minute, 60*time.Minute)
+	if err != domain.ErrInstanceNotFound {
+		t.Errorf("ExtendInstanceTTLAtomic() should return ErrInstanceNotFound, got %v", err)
+	}
+}
+
+// TestValkeyRepository_ExtendInstanceTTLAtomic_Concurrent tests that concurrent TTL extensions
+// correctly enforce max TTL atomically. This verifies the fix for try-it-now-e3p.
+func TestValkeyRepository_ExtendInstanceTTLAtomic_Concurrent(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	// Create an instance with TTL
+	instance := &domain.Instance{
+		ID:        "ttl-concurrent-test-1",
+		Hostname:  "demo-ttl-concurrent",
+		Port:      32210,
+		State:     domain.StateAssigned,
+		CreatedAt: time.Now(),
+	}
+
+	if err := repo.SaveInstance(ctx, instance); err != nil {
+		t.Fatalf("SaveInstance() error = %v", err)
+	}
+
+	// Set initial TTL to 50 minutes, max is 90 minutes
+	// Each extension is 30 minutes, so only ONE extension should succeed
+	// (50 + 30 = 80 <= 90, but 80 + 30 = 110 > 90)
+	initialTTL := 50 * time.Minute
+	maxTTL := 90 * time.Minute
+	extension := 30 * time.Minute
+
+	if err := repo.SetInstanceTTL(ctx, instance.ID, initialTTL); err != nil {
+		t.Fatalf("SetInstanceTTL() error = %v", err)
+	}
+
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	var successCount atomic.Int32
+	var failCount atomic.Int32
+
+	// Launch concurrent extension requests
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := repo.ExtendInstanceTTLAtomic(ctx, instance.ID, extension, maxTTL)
+			if err == domain.ErrMaxTTLExceeded {
+				failCount.Add(1)
+				return
+			}
+			if err != nil {
+				t.Logf("ExtendInstanceTTLAtomic error: %v", err)
+				return
+			}
+			if result.Success {
+				successCount.Add(1)
+			} else {
+				failCount.Add(1)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Exactly ONE extension should succeed
+	if successCount.Load() != 1 {
+		t.Errorf("Success count = %d, want 1 (atomic max TTL enforcement failed)", successCount.Load())
+	}
+
+	// The rest should fail
+	expectedFails := int32(numGoroutines - 1)
+	if failCount.Load() != expectedFails {
+		t.Errorf("Fail count = %d, want %d", failCount.Load(), expectedFails)
+	}
+
+	// Verify final TTL is approximately 80 minutes (50 + 30)
+	got, err := repo.GetInstance(ctx, instance.ID)
+	if err != nil {
+		t.Fatalf("GetInstance() error = %v", err)
+	}
+	remaining := got.TTLRemaining()
+	if remaining < 79*time.Minute || remaining > 81*time.Minute {
+		t.Errorf("Final TTL remaining = %v, want ~80 minutes", remaining)
+	}
+}

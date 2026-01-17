@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/instant-demo/try-it-now/internal/config"
 	"github.com/instant-demo/try-it-now/internal/domain"
 	"github.com/instant-demo/try-it-now/internal/metrics"
 	"github.com/instant-demo/try-it-now/internal/pool"
-	"github.com/gin-gonic/gin"
+	"github.com/instant-demo/try-it-now/internal/store"
 )
 
 func init() {
@@ -169,6 +170,43 @@ func (m *MockRepository) ExtendInstanceTTL(ctx context.Context, id string, exten
 	return nil
 }
 
+func (m *MockRepository) ExtendInstanceTTLAtomic(ctx context.Context, id string, extension, maxTTL time.Duration) (*store.ExtendTTLResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[id]
+	if !ok {
+		return nil, domain.ErrInstanceNotFound
+	}
+
+	var newExp time.Time
+	var remaining time.Duration
+	if inst.ExpiresAt != nil {
+		remaining = time.Until(*inst.ExpiresAt)
+		if remaining < 0 {
+			remaining = 0
+		}
+		newExp = inst.ExpiresAt.Add(extension)
+	} else {
+		newExp = time.Now().Add(extension)
+	}
+
+	newRemaining := remaining + extension
+	if newRemaining > maxTTL {
+		return &store.ExtendTTLResult{
+			Success:   false,
+			Remaining: remaining,
+		}, domain.ErrMaxTTLExceeded
+	}
+
+	inst.ExpiresAt = &newExp
+	inst.ExpiresAtUnix = newExp.Unix()
+	return &store.ExtendTTLResult{
+		Success:      true,
+		NewExpiresAt: newExp,
+		Remaining:    time.Until(newExp),
+	}, nil
+}
+
 func (m *MockRepository) AllocatePort(ctx context.Context) (int, error) {
 	return 32000, nil
 }
@@ -183,6 +221,10 @@ func (m *MockRepository) CheckRateLimit(ctx context.Context, ip string, hourlyLi
 
 func (m *MockRepository) IncrementRateLimit(ctx context.Context, ip string) error {
 	return nil
+}
+
+func (m *MockRepository) CheckAndIncrementRateLimit(ctx context.Context, ip string, hourlyLimit, dailyLimit int) (bool, error) {
+	return true, nil
 }
 
 func (m *MockRepository) GetPoolStats(ctx context.Context) (*domain.PoolStats, error) {

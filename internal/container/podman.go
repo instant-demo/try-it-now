@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/instant-demo/try-it-now/internal/config"
-	"github.com/instant-demo/try-it-now/internal/domain"
-	"github.com/instant-demo/try-it-now/pkg/logging"
 	"github.com/containers/podman/v5/pkg/bindings"
 	"github.com/containers/podman/v5/pkg/bindings/containers"
 	"github.com/containers/podman/v5/pkg/bindings/system"
 	"github.com/containers/podman/v5/pkg/specgen"
+	"github.com/instant-demo/try-it-now/internal/config"
+	"github.com/instant-demo/try-it-now/internal/domain"
+	"github.com/instant-demo/try-it-now/pkg/logging"
 	nettypes "go.podman.io/common/libnetwork/types"
 )
 

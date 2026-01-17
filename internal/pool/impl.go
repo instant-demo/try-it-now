@@ -3,10 +3,12 @@ package pool
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/instant-demo/try-it-now/internal/container"
 	"github.com/instant-demo/try-it-now/internal/database"
 	"github.com/instant-demo/try-it-now/internal/domain"
@@ -14,7 +16,6 @@ import (
 	"github.com/instant-demo/try-it-now/internal/proxy"
 	"github.com/instant-demo/try-it-now/internal/store"
 	"github.com/instant-demo/try-it-now/pkg/logging"
-	"github.com/google/uuid"
 )
 
 // CRIURuntime is an optional interface for runtimes that support CRIU checkpoint/restore.
@@ -197,7 +198,16 @@ func (m *PoolManager) StartReplenisher(ctx context.Context) error {
 	m.running = true
 	m.mu.Unlock()
 
-	go m.replenishLoop(ctx)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				m.logger.Error("Recovered from panic in replenishLoop",
+					"panic", r,
+					"stack", string(debug.Stack()))
+			}
+		}()
+		m.replenishLoop(ctx)
+	}()
 
 	return nil
 }
@@ -219,28 +229,27 @@ func (m *PoolManager) StopReplenisher() error {
 }
 
 // TriggerReplenish manually triggers a replenishment check.
+// Re-checks pool state before each provision to prevent over-provisioning race conditions.
 func (m *PoolManager) TriggerReplenish(ctx context.Context) error {
-	stats, err := m.Stats(ctx)
-	if err != nil {
-		return err
-	}
+	for {
+		stats, err := m.Stats(ctx)
+		if err != nil {
+			return err
+		}
 
-	needed := stats.ReplenishmentNeeded()
-	if needed <= 0 {
-		return nil
-	}
+		needed := stats.ReplenishmentNeeded()
+		if needed <= 0 {
+			return nil // Pool is full enough
+		}
 
-	m.logger.Info("Replenishing pool", "needed", needed, "ready", stats.Ready, "target", stats.Target)
+		m.logger.Info("Replenishing pool", "needed", needed, "ready", stats.Ready, "target", stats.Target)
 
-	// Provision instances in parallel (but not more than capacity allows)
-	for i := 0; i < needed; i++ {
+		// Provision ONE instance, then loop re-checks stats to prevent over-provisioning
 		if err := m.provisionInstance(ctx); err != nil {
 			m.logger.Warn("Failed to provision instance", "error", err)
-			// Continue trying to provision others
+			return err
 		}
 	}
-
-	return nil
 }
 
 // replenishLoop is the background loop that checks pool levels.
@@ -293,6 +302,16 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to allocate port: %w", err)
 	}
+
+	// Use defer with success flag to ensure port is always released on failure
+	var succeeded bool
+	defer func() {
+		if !succeeded {
+			if err := m.repo.ReleasePort(ctx, port); err != nil {
+				m.logger.Error("Failed to release port on provision failure", "port", port, "error", err)
+			}
+		}
+	}()
 
 	// Generate unique identifiers
 	hostname := m.generateHostname()
@@ -359,9 +378,6 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 
 		instance, err = m.runtime.Start(ctx, opts)
 		if err != nil {
-			// Release port back to pool. Error ignored because we're already in failure
-			// path and port will be reclaimed on next pool initialization.
-			_ = m.repo.ReleasePort(ctx, port)
 			if m.metrics != nil {
 				m.metrics.ProvisionsTotal.WithLabelValues(method, "failure").Inc()
 			}
@@ -374,11 +390,8 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 
 	// Wait for container to be ready
 	if err := m.waitForReady(ctx, instance); err != nil {
-		// Best-effort cleanup during provision failure. Container stop may fail if
-		// container is in bad state, and port release failure is acceptable since
-		// pool reinitializes available ports on startup.
+		// Best-effort container cleanup. Container stop may fail if container is in bad state.
 		_ = m.runtime.Stop(ctx, instance.ContainerID)
-		_ = m.repo.ReleasePort(ctx, port)
 		if m.metrics != nil {
 			m.metrics.ProvisionsTotal.WithLabelValues(method, "failure").Inc()
 		}
@@ -390,11 +403,8 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 
 	// Add to pool
 	if err := m.repo.AddToPool(ctx, instance); err != nil {
-		// Best-effort cleanup during provision failure. Container stop may fail if
-		// container is in bad state, and port release failure is acceptable since
-		// pool reinitializes available ports on startup.
+		// Best-effort container cleanup. Container stop may fail if container is in bad state.
 		_ = m.runtime.Stop(ctx, instance.ContainerID)
-		_ = m.repo.ReleasePort(ctx, port)
 		if m.metrics != nil {
 			m.metrics.ProvisionsTotal.WithLabelValues(method, "failure").Inc()
 		}
@@ -408,6 +418,9 @@ func (m *PoolManager) provisionInstance(ctx context.Context) error {
 	}
 
 	m.logger.Info("Provisioned new instance", "instanceID", instance.ID, "port", port)
+
+	// Only set succeeded=true after AddToPool succeeds - defer will skip port release
+	succeeded = true
 	return nil
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/instant-demo/try-it-now/internal/container"
 	"github.com/instant-demo/try-it-now/internal/domain"
 	"github.com/instant-demo/try-it-now/internal/proxy"
+	"github.com/instant-demo/try-it-now/internal/store"
 	"github.com/instant-demo/try-it-now/pkg/logging"
 )
 
@@ -131,11 +132,17 @@ func (m *mockRepository) GetInstanceTTL(ctx context.Context, id string) (time.Du
 func (m *mockRepository) ExtendInstanceTTL(ctx context.Context, id string, extension time.Duration) error {
 	return nil
 }
-func (m *mockRepository) AllocatePort(ctx context.Context) (int, error)           { return 0, nil }
+func (m *mockRepository) AllocatePort(ctx context.Context) (int, error) { return 0, nil }
 func (m *mockRepository) CheckRateLimit(ctx context.Context, ip string, hourly, daily int) (bool, error) {
 	return true, nil
 }
 func (m *mockRepository) IncrementRateLimit(ctx context.Context, ip string) error { return nil }
+func (m *mockRepository) CheckAndIncrementRateLimit(ctx context.Context, ip string, hourly, daily int) (bool, error) {
+	return true, nil
+}
+func (m *mockRepository) ExtendInstanceTTLAtomic(ctx context.Context, id string, extension, maxTTL time.Duration) (*store.ExtendTTLResult, error) {
+	return nil, nil
+}
 func (m *mockRepository) GetPoolStats(ctx context.Context) (*domain.PoolStats, error) {
 	return nil, nil
 }

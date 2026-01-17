@@ -33,6 +33,10 @@ type TTLManager interface {
 	SetInstanceTTL(ctx context.Context, id string, ttl time.Duration) error
 	GetInstanceTTL(ctx context.Context, id string) (time.Duration, error)
 	ExtendInstanceTTL(ctx context.Context, id string, extension time.Duration) error
+	// ExtendInstanceTTLAtomic atomically extends TTL if it would not exceed maxTTL.
+	// Returns ErrMaxTTLExceeded if the extension would exceed the limit.
+	// This prevents TOCTOU race conditions in concurrent scenarios.
+	ExtendInstanceTTLAtomic(ctx context.Context, id string, extension, maxTTL time.Duration) (*ExtendTTLResult, error)
 }
 
 // PortAllocator handles port management.
@@ -45,6 +49,9 @@ type PortAllocator interface {
 type RateLimiter interface {
 	CheckRateLimit(ctx context.Context, ip string, hourlyLimit, dailyLimit int) (bool, error)
 	IncrementRateLimit(ctx context.Context, ip string) error
+	// CheckAndIncrementRateLimit atomically checks rate limits and increments if allowed.
+	// This prevents TOCTOU race conditions in concurrent scenarios.
+	CheckAndIncrementRateLimit(ctx context.Context, ip string, hourlyLimit, dailyLimit int) (bool, error)
 }
 
 // StatsCollector handles statistics and counters.

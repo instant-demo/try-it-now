@@ -7,12 +7,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/instant-demo/try-it-now/internal/config"
 	"github.com/instant-demo/try-it-now/internal/domain"
 	"github.com/instant-demo/try-it-now/internal/metrics"
 	"github.com/instant-demo/try-it-now/internal/pool"
 	"github.com/instant-demo/try-it-now/internal/store"
-	"github.com/gin-gonic/gin"
 )
 
 // Handler holds the HTTP handlers and dependencies.
@@ -198,8 +198,10 @@ func (h *Handler) acquireDemo(c *gin.Context) {
 	// Get client IP for rate limiting
 	clientIP := c.ClientIP()
 
-	// Check rate limit
-	allowed, err := h.store.CheckRateLimit(ctx, clientIP, h.cfg.RateLimit.RequestsPerHour, h.cfg.RateLimit.RequestsPerDay)
+	// Atomically check and increment rate limit
+	// This prevents TOCTOU race conditions where concurrent requests could all pass
+	// the check before any increment occurs
+	allowed, err := h.store.CheckAndIncrementRateLimit(ctx, clientIP, h.cfg.RateLimit.RequestsPerHour, h.cfg.RateLimit.RequestsPerDay)
 	if err != nil {
 		if h.metrics != nil {
 			h.metrics.AcquisitionsTotal.WithLabelValues("error").Inc()
@@ -265,10 +267,7 @@ func (h *Handler) acquireDemo(c *gin.Context) {
 		h.metrics.AcquisitionDuration.Observe(time.Since(start).Seconds())
 	}
 
-	// Increment rate limit
-	if err := h.store.IncrementRateLimit(ctx, clientIP); err != nil {
-		// Log but don't fail - instance is already assigned
-	}
+	// Rate limit was already incremented atomically above
 
 	// Set user IP on instance for audit/analytics purposes. Error ignored because
 	// instance is already successfully acquired - failing to persist the IP update
@@ -344,8 +343,12 @@ func (h *Handler) extendDemo(c *gin.Context) {
 		return
 	}
 
-	// Get instance to check current TTL
-	instance, err := h.store.GetInstance(ctx, id)
+	extension := time.Duration(req.Minutes) * time.Minute
+
+	// Atomically extend TTL with max TTL check
+	// This prevents TOCTOU race conditions where concurrent extensions could all pass
+	// the max TTL check before any extension is applied
+	result, err := h.store.ExtendInstanceTTLAtomic(ctx, id, extension, h.cfg.Pool.MaxTTL)
 	if err != nil {
 		if errors.Is(err, domain.ErrInstanceNotFound) {
 			c.JSON(http.StatusNotFound, ErrorResponse{
@@ -354,27 +357,14 @@ func (h *Handler) extendDemo(c *gin.Context) {
 			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error: "Failed to get instance",
-			Code:  "GET_ERROR",
-		})
-		return
-	}
-
-	// Check if extension would exceed max TTL
-	extension := time.Duration(req.Minutes) * time.Minute
-	newTTL := instance.TTLRemaining() + extension
-	if newTTL > h.cfg.Pool.MaxTTL {
-		c.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "Extension would exceed maximum TTL",
-			Code:    "MAX_TTL_EXCEEDED",
-			Details: fmt.Sprintf("Maximum TTL is %v", h.cfg.Pool.MaxTTL),
-		})
-		return
-	}
-
-	// Extend TTL
-	if err := h.store.ExtendInstanceTTL(ctx, id, extension); err != nil {
+		if errors.Is(err, domain.ErrMaxTTLExceeded) {
+			c.JSON(http.StatusBadRequest, ErrorResponse{
+				Error:   "Extension would exceed maximum TTL",
+				Code:    "MAX_TTL_EXCEEDED",
+				Details: fmt.Sprintf("Maximum TTL is %v, current remaining: %v", h.cfg.Pool.MaxTTL, result.Remaining),
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error: "Failed to extend TTL",
 			Code:  "EXTEND_ERROR",
@@ -382,20 +372,10 @@ func (h *Handler) extendDemo(c *gin.Context) {
 		return
 	}
 
-	// Get updated instance
-	instance, err = h.store.GetInstance(ctx, id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error: "Failed to retrieve updated instance",
-			Code:  "INTERNAL_ERROR",
-		})
-		return
-	}
-
 	c.JSON(http.StatusOK, ExtendResponse{
-		ID:           instance.ID,
-		TTLRemaining: int(instance.TTLRemaining().Seconds()),
-		ExpiresAt:    instance.ExpiresAt,
+		ID:           id,
+		TTLRemaining: int(result.Remaining.Seconds()),
+		ExpiresAt:    &result.NewExpiresAt,
 	})
 }
 

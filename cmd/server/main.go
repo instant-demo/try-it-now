@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -146,6 +147,13 @@ func main() {
 	// Start metrics gauge updater
 	gaugeCtx, cancelGauge := context.WithCancel(ctx)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("Recovered from panic in metrics updater",
+					"panic", r,
+					"stack", string(debug.Stack()))
+			}
+		}()
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {

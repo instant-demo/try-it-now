@@ -12,6 +12,7 @@ import (
 	"github.com/instant-demo/try-it-now/internal/container"
 	"github.com/instant-demo/try-it-now/internal/domain"
 	"github.com/instant-demo/try-it-now/internal/proxy"
+	"github.com/instant-demo/try-it-now/internal/store"
 	"github.com/instant-demo/try-it-now/pkg/logging"
 )
 
@@ -434,6 +435,12 @@ func (r *testRepo) CheckRateLimit(ctx context.Context, ip string, hourly, daily 
 	return true, nil
 }
 func (r *testRepo) IncrementRateLimit(ctx context.Context, ip string) error { return nil }
+func (r *testRepo) CheckAndIncrementRateLimit(ctx context.Context, ip string, hourly, daily int) (bool, error) {
+	return true, nil
+}
+func (r *testRepo) ExtendInstanceTTLAtomic(ctx context.Context, id string, extension, maxTTL time.Duration) (*store.ExtendTTLResult, error) {
+	return nil, nil
+}
 func (r *testRepo) GetPoolStats(ctx context.Context) (*domain.PoolStats, error) {
 	return nil, nil
 }

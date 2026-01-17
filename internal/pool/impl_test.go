@@ -11,6 +11,7 @@ import (
 	"github.com/instant-demo/try-it-now/internal/container"
 	"github.com/instant-demo/try-it-now/internal/domain"
 	"github.com/instant-demo/try-it-now/internal/proxy"
+	"github.com/instant-demo/try-it-now/internal/store"
 	"github.com/instant-demo/try-it-now/pkg/logging"
 )
 
@@ -157,6 +158,43 @@ func (m *MockRepository) ExtendInstanceTTL(ctx context.Context, id string, exten
 	return domain.ErrInstanceNotFound
 }
 
+func (m *MockRepository) ExtendInstanceTTLAtomic(ctx context.Context, id string, extension, maxTTL time.Duration) (*store.ExtendTTLResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst, ok := m.instances[id]
+	if !ok {
+		return nil, domain.ErrInstanceNotFound
+	}
+
+	var newExp time.Time
+	var remaining time.Duration
+	if inst.ExpiresAt != nil {
+		remaining = time.Until(*inst.ExpiresAt)
+		if remaining < 0 {
+			remaining = 0
+		}
+		newExp = inst.ExpiresAt.Add(extension)
+	} else {
+		newExp = time.Now().Add(extension)
+	}
+
+	newRemaining := remaining + extension
+	if newRemaining > maxTTL {
+		return &store.ExtendTTLResult{
+			Success:   false,
+			Remaining: remaining,
+		}, domain.ErrMaxTTLExceeded
+	}
+
+	inst.ExpiresAt = &newExp
+	inst.ExpiresAtUnix = newExp.Unix()
+	return &store.ExtendTTLResult{
+		Success:      true,
+		NewExpiresAt: newExp,
+		Remaining:    time.Until(newExp),
+	}, nil
+}
+
 func (m *MockRepository) AllocatePort(ctx context.Context) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -182,6 +220,10 @@ func (m *MockRepository) CheckRateLimit(ctx context.Context, ip string, hourlyLi
 
 func (m *MockRepository) IncrementRateLimit(ctx context.Context, ip string) error {
 	return nil
+}
+
+func (m *MockRepository) CheckAndIncrementRateLimit(ctx context.Context, ip string, hourlyLimit, dailyLimit int) (bool, error) {
+	return true, nil
 }
 
 func (m *MockRepository) GetPoolStats(ctx context.Context) (*domain.PoolStats, error) {
@@ -583,5 +625,150 @@ func TestPoolManager_GenerateDBPrefix(t *testing.T) {
 	}
 	if !dbPrefixPattern.MatchString(prefix2) {
 		t.Errorf("generateDBPrefix() returned invalid format: %s (expected d<8 hex chars>_)", prefix2)
+	}
+}
+
+// TestPoolManager_TriggerReplenish_NoOverProvisioning tests that TriggerReplenish
+// does not over-provision when the pool fills up during replenishment.
+// This verifies the fix for try-it-now-wh8 (over-provisioning race).
+func TestPoolManager_TriggerReplenish_NoOverProvisioning(t *testing.T) {
+	repo := NewMockRepository()
+	runtime := NewMockRuntime()
+	proxyMgr := NewMockRouteManager()
+
+	cfg := ManagerConfig{
+		TargetPoolSize:     3,
+		MaxPoolSize:        10,
+		ReplenishThreshold: 0.5,
+	}
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, nil, "nginx:alpine", "", "localhost", "", logging.Nop(), nil)
+
+	ctx := context.Background()
+
+	// Pre-populate pool with 2 instances (1 below target)
+	repo.AddToPool(ctx, &domain.Instance{ID: "existing-1", State: domain.StateReady})
+	repo.AddToPool(ctx, &domain.Instance{ID: "existing-2", State: domain.StateReady})
+
+	// Trigger replenishment - should provision only 1
+	if err := manager.TriggerReplenish(ctx); err != nil {
+		t.Fatalf("TriggerReplenish() error = %v", err)
+	}
+
+	// Check that exactly 3 instances exist (2 existing + 1 new)
+	stats, _ := manager.Stats(ctx)
+	if stats.Ready != 3 {
+		t.Errorf("Ready after replenish = %d, want 3 (should not over-provision)", stats.Ready)
+	}
+}
+
+// TestPoolManager_PortReleaseOnStartFailure tests that ports are released
+// when container start fails. This verifies part of try-it-now-k4z fix.
+func TestPoolManager_PortReleaseOnStartFailure(t *testing.T) {
+	repo := NewMockRepository()
+	runtime := NewMockRuntime()
+	runtime.failStart = true // Make Start() fail
+	proxyMgr := NewMockRouteManager()
+
+	cfg := ManagerConfig{
+		TargetPoolSize:     1,
+		MaxPoolSize:        10,
+		ReplenishThreshold: 0.5,
+	}
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, nil, "nginx:alpine", "", "localhost", "", logging.Nop(), nil)
+
+	ctx := context.Background()
+
+	// Try to replenish - should fail because Start() fails
+	err := manager.TriggerReplenish(ctx)
+	if err == nil {
+		t.Fatal("TriggerReplenish() should have failed when Start() fails")
+	}
+
+	// Verify no ports are allocated (port should have been released)
+	repo.mu.Lock()
+	allocatedPorts := len(repo.ports)
+	repo.mu.Unlock()
+
+	if allocatedPorts != 0 {
+		t.Errorf("Allocated ports = %d, want 0 (port should be released on failure)", allocatedPorts)
+	}
+}
+
+// MockRuntimeWithHealthCheckFailure is a mock runtime that fails health checks.
+type MockRuntimeWithHealthCheckFailure struct {
+	MockRuntime
+}
+
+func (m *MockRuntimeWithHealthCheckFailure) HealthCheck(ctx context.Context, containerID string) (bool, error) {
+	return false, nil // Always unhealthy
+}
+
+// TestPoolManager_PortReleaseOnHealthCheckFailure tests that ports are released
+// when health check fails. This verifies another part of try-it-now-k4z fix.
+func TestPoolManager_PortReleaseOnHealthCheckFailure(t *testing.T) {
+	repo := NewMockRepository()
+	runtime := &MockRuntimeWithHealthCheckFailure{MockRuntime: *NewMockRuntime()}
+	proxyMgr := NewMockRouteManager()
+
+	cfg := ManagerConfig{
+		TargetPoolSize:     1,
+		MaxPoolSize:        10,
+		ReplenishThreshold: 0.5,
+	}
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, nil, "nginx:alpine", "", "localhost", "", logging.Nop(), nil)
+
+	// Use short context to make health check timeout quickly
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Try to replenish - should fail because health check fails
+	err := manager.TriggerReplenish(ctx)
+	if err == nil {
+		t.Fatal("TriggerReplenish() should have failed when health check times out")
+	}
+
+	// Verify no ports are allocated (port should have been released)
+	repo.mu.Lock()
+	allocatedPorts := len(repo.ports)
+	repo.mu.Unlock()
+
+	if allocatedPorts != 0 {
+		t.Errorf("Allocated ports = %d, want 0 (port should be released on health check failure)", allocatedPorts)
+	}
+}
+
+// TestPoolManager_ReplenishLoopContextCancellation tests that replenishLoop
+// properly exits when context is cancelled. This verifies try-it-now-oaz fix.
+func TestPoolManager_ReplenishLoopContextCancellation(t *testing.T) {
+	repo := NewMockRepository()
+	runtime := NewMockRuntime()
+	proxyMgr := NewMockRouteManager()
+
+	cfg := ManagerConfig{
+		TargetPoolSize:    2,
+		MaxPoolSize:       5,
+		ReplenishInterval: 10 * time.Second, // Long interval so ticker won't fire
+	}
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, nil, "nginx:alpine", "", "localhost", "", logging.Nop(), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start replenisher
+	if err := manager.StartReplenisher(ctx); err != nil {
+		t.Fatalf("StartReplenisher() error = %v", err)
+	}
+
+	// Wait for initial replenishment
+	time.Sleep(200 * time.Millisecond)
+
+	// Cancel context instead of calling StopReplenisher
+	cancel()
+
+	// Wait a bit and verify the loop exited (doneCh should be closed)
+	select {
+	case <-manager.doneCh:
+		// Good - loop exited properly
+	case <-time.After(2 * time.Second):
+		t.Error("replenishLoop did not exit after context cancellation")
 	}
 }

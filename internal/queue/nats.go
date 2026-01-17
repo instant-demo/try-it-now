@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -236,6 +237,14 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					c.logger.Error("Recovered from panic in provision worker",
+						"workerID", workerID,
+						"panic", r,
+						"stack", string(debug.Stack()))
+				}
+			}()
 			c.runProvisionWorker(provisionCons, workerID)
 		}(i)
 	}
@@ -245,6 +254,14 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					c.logger.Error("Recovered from panic in cleanup worker",
+						"workerID", workerID,
+						"panic", r,
+						"stack", string(debug.Stack()))
+				}
+			}()
 			c.runCleanupWorker(cleanupCons, workerID)
 		}(i)
 	}

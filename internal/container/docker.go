@@ -8,14 +8,14 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/instant-demo/try-it-now/internal/config"
-	"github.com/instant-demo/try-it-now/internal/domain"
-	"github.com/instant-demo/try-it-now/pkg/logging"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
+	"github.com/instant-demo/try-it-now/internal/config"
+	"github.com/instant-demo/try-it-now/internal/domain"
+	"github.com/instant-demo/try-it-now/pkg/logging"
 )
 
 // ErrCRIUNotSupported is returned when attempting CRIU restore in Docker mode.

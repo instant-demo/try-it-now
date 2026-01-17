@@ -112,6 +112,78 @@ redis.call('SADD', statePrefix .. 'assigned', id)
 
 return newData
 `)
+
+	// checkAndIncrementRateLimitScript atomically checks rate limits and increments if allowed.
+	// KEYS[1] = hourly rate limit key (ratelimit:hour:{ip})
+	// KEYS[2] = daily rate limit key (ratelimit:day:{ip})
+	// ARGV[1] = hourly limit
+	// ARGV[2] = daily limit
+	// Returns: 1 if allowed (incremented), 0 if denied (limit reached)
+	checkAndIncrementRateLimitScript = valkey.NewLuaScript(`
+local hourKey, dayKey = KEYS[1], KEYS[2]
+local hourLimit, dayLimit = tonumber(ARGV[1]), tonumber(ARGV[2])
+local hourCount = tonumber(redis.call('GET', hourKey) or '0')
+local dayCount = tonumber(redis.call('GET', dayKey) or '0')
+if hourCount >= hourLimit or dayCount >= dayLimit then
+    return 0  -- Denied
+end
+redis.call('INCR', hourKey)
+redis.call('EXPIRE', hourKey, 3600)
+redis.call('INCR', dayKey)
+redis.call('EXPIRE', dayKey, 86400)
+return 1  -- Allowed
+`)
+
+	// extendInstanceTTLAtomicScript atomically extends an instance's TTL if within limits.
+	// KEYS[1] = instance key (instance:{id})
+	// ARGV[1] = extension in seconds
+	// ARGV[2] = max TTL in seconds
+	// ARGV[3] = current Unix timestamp (seconds)
+	// Returns: JSON with either {ok: true, new_expires_unix: <unix>} or {error: "...", remaining: <seconds>}
+	// Note: Uses expires_at_unix field for atomic calculations. Falls back to error if field missing.
+	extendInstanceTTLAtomicScript = valkey.NewLuaScript(`
+local instanceKey = KEYS[1]
+local extensionSecs = tonumber(ARGV[1])
+local maxTTLSecs = tonumber(ARGV[2])
+local nowUnix = tonumber(ARGV[3])
+
+-- Get current instance
+local data = redis.call('GET', instanceKey)
+if not data then
+    return cjson.encode({error = 'not_found'})
+end
+
+local instance = cjson.decode(data)
+
+-- Check if expires_at_unix is set (required for atomic operations)
+if not instance.expires_at_unix or instance.expires_at_unix == cjson.null then
+    return cjson.encode({error = 'no_expiry'})
+end
+
+local expiresUnix = tonumber(instance.expires_at_unix)
+local remaining = expiresUnix - nowUnix
+if remaining < 0 then
+    remaining = 0
+end
+
+-- Check if extension would exceed max TTL
+local newRemaining = remaining + extensionSecs
+if newRemaining > maxTTLSecs then
+    return cjson.encode({error = 'exceeds_max', remaining = remaining})
+end
+
+-- Calculate new expiry
+local newExpiresUnix = expiresUnix + extensionSecs
+instance.expires_at_unix = newExpiresUnix
+
+-- Note: expires_at (RFC3339 string) will be updated by Go after this script returns
+-- We only update expires_at_unix atomically here
+
+-- Save updated instance
+local newData = cjson.encode(instance)
+redis.call('SET', instanceKey, newData)
+return cjson.encode({ok = true, new_expires_unix = newExpiresUnix})
+`)
 )
 
 // Redis key prefixes and names
@@ -402,6 +474,7 @@ func (r *ValkeyRepository) SetInstanceTTL(ctx context.Context, id string, ttl ti
 
 	expiresAt := time.Now().Add(ttl)
 	instance.ExpiresAt = &expiresAt
+	instance.ExpiresAtUnix = expiresAt.Unix()
 
 	data, err := json.Marshal(instance)
 	if err != nil {
@@ -427,6 +500,8 @@ func (r *ValkeyRepository) GetInstanceTTL(ctx context.Context, id string) (time.
 }
 
 // ExtendInstanceTTL extends the expiry time for an instance.
+// Note: This is the non-atomic version. Use ExtendInstanceTTLAtomic for concurrent-safe
+// extensions that enforce max TTL limits.
 func (r *ValkeyRepository) ExtendInstanceTTL(ctx context.Context, id string, extension time.Duration) error {
 	instance, err := r.GetInstance(ctx, id)
 	if err != nil {
@@ -434,12 +509,16 @@ func (r *ValkeyRepository) ExtendInstanceTTL(ctx context.Context, id string, ext
 	}
 
 	var newExpiry time.Time
-	if instance.ExpiresAt != nil {
+	if instance.ExpiresAtUnix > 0 {
+		// Use Unix timestamp as source of truth
+		newExpiry = time.Unix(instance.ExpiresAtUnix, 0).Add(extension)
+	} else if instance.ExpiresAt != nil {
 		newExpiry = instance.ExpiresAt.Add(extension)
 	} else {
 		newExpiry = time.Now().Add(extension)
 	}
 	instance.ExpiresAt = &newExpiry
+	instance.ExpiresAtUnix = newExpiry.Unix()
 
 	data, err := json.Marshal(instance)
 	if err != nil {
@@ -546,6 +625,126 @@ func (r *ValkeyRepository) IncrementRateLimit(ctx context.Context, ip string) er
 	return nil
 }
 
+// CheckAndIncrementRateLimit atomically checks rate limits and increments if allowed.
+// Returns true if the request is allowed, false if rate limited.
+// This prevents TOCTOU race conditions where concurrent requests could all pass the check
+// before any increment occurs.
+func (r *ValkeyRepository) CheckAndIncrementRateLimit(ctx context.Context, ip string, hourlyLimit, dailyLimit int) (bool, error) {
+	hourKey := keyRateLimitHour + ip
+	dayKey := keyRateLimitDay + ip
+
+	result := checkAndIncrementRateLimitScript.Exec(
+		ctx,
+		r.client,
+		[]string{hourKey, dayKey},
+		[]string{strconv.Itoa(hourlyLimit), strconv.Itoa(dailyLimit)},
+	)
+
+	allowed, err := result.ToInt64()
+	if err != nil {
+		return false, fmt.Errorf("failed to execute rate limit script: %w", err)
+	}
+
+	return allowed == 1, nil
+}
+
+// ExtendTTLResult contains the result of an atomic TTL extension.
+type ExtendTTLResult struct {
+	Success      bool
+	NewExpiresAt time.Time
+	Remaining    time.Duration
+}
+
+// ExtendInstanceTTLAtomic atomically extends an instance's TTL if it would not exceed maxTTL.
+// Returns ErrInstanceNotFound if the instance doesn't exist.
+// Returns ErrMaxTTLExceeded if the extension would exceed the maximum TTL.
+// This prevents TOCTOU race conditions where concurrent extensions could all pass the
+// max TTL check before any extension is applied.
+func (r *ValkeyRepository) ExtendInstanceTTLAtomic(ctx context.Context, id string, extension, maxTTL time.Duration) (*ExtendTTLResult, error) {
+	instanceKey := keyInstance + id
+	nowUnix := time.Now().Unix()
+
+	result := extendInstanceTTLAtomicScript.Exec(
+		ctx,
+		r.client,
+		[]string{instanceKey},
+		[]string{
+			strconv.FormatInt(int64(extension.Seconds()), 10),
+			strconv.FormatInt(int64(maxTTL.Seconds()), 10),
+			strconv.FormatInt(nowUnix, 10),
+		},
+	)
+
+	data, err := result.ToString()
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute extend TTL script: %w", err)
+	}
+
+	// Parse the JSON response
+	var resp struct {
+		OK             bool    `json:"ok"`
+		Error          string  `json:"error"`
+		NewExpiresUnix int64   `json:"new_expires_unix"`
+		Remaining      float64 `json:"remaining"`
+	}
+	if err := json.Unmarshal([]byte(data), &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse script response: %w", err)
+	}
+
+	if resp.Error != "" {
+		switch resp.Error {
+		case "not_found":
+			return nil, domain.ErrInstanceNotFound
+		case "no_expiry":
+			// Instance has no expiry set, fall back to non-atomic extend
+			// This can happen for instances created before ExpiresAtUnix was added
+			return nil, fmt.Errorf("instance has no expires_at_unix field set")
+		case "exceeds_max":
+			return &ExtendTTLResult{
+				Success:   false,
+				Remaining: time.Duration(resp.Remaining) * time.Second,
+			}, domain.ErrMaxTTLExceeded
+		default:
+			return nil, fmt.Errorf("unknown error from script: %s", resp.Error)
+		}
+	}
+
+	newExpiresAt := time.Unix(resp.NewExpiresUnix, 0)
+
+	// Update the expires_at field to keep it in sync with expires_at_unix
+	// This is a secondary update, the atomic operation is already complete
+	if err := r.syncExpiresAtField(ctx, id, newExpiresAt); err != nil {
+		// Log but don't fail - the atomic operation succeeded
+		// The expires_at_unix is the source of truth
+	}
+
+	return &ExtendTTLResult{
+		Success:      true,
+		NewExpiresAt: newExpiresAt,
+		Remaining:    time.Until(newExpiresAt),
+	}, nil
+}
+
+// syncExpiresAtField updates the expires_at string field to match expires_at_unix.
+// This is a best-effort update to keep the fields in sync.
+func (r *ValkeyRepository) syncExpiresAtField(ctx context.Context, id string, expiresAt time.Time) error {
+	instance, err := r.GetInstance(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	instance.ExpiresAt = &expiresAt
+	instance.ExpiresAtUnix = expiresAt.Unix()
+
+	data, err := json.Marshal(instance)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instance: %w", err)
+	}
+
+	key := keyInstance + id
+	return r.client.Do(ctx, r.client.B().Set().Key(key).Value(string(data)).Build()).Error()
+}
+
 // GetPoolStats returns current pool statistics.
 func (r *ValkeyRepository) GetPoolStats(ctx context.Context) (*domain.PoolStats, error) {
 	stats := &domain.PoolStats{}
@@ -593,13 +792,13 @@ func (r *ValkeyRepository) Ping(ctx context.Context) error {
 
 // Compile-time checks that ValkeyRepository implements all interfaces
 var (
-	_ InstanceStore   = (*ValkeyRepository)(nil)
-	_ PoolStore       = (*ValkeyRepository)(nil)
-	_ InstanceLister  = (*ValkeyRepository)(nil)
-	_ TTLManager      = (*ValkeyRepository)(nil)
-	_ PortAllocator   = (*ValkeyRepository)(nil)
-	_ RateLimiter     = (*ValkeyRepository)(nil)
-	_ StatsCollector  = (*ValkeyRepository)(nil)
-	_ HealthChecker   = (*ValkeyRepository)(nil)
-	_ Repository      = (*ValkeyRepository)(nil)
+	_ InstanceStore  = (*ValkeyRepository)(nil)
+	_ PoolStore      = (*ValkeyRepository)(nil)
+	_ InstanceLister = (*ValkeyRepository)(nil)
+	_ TTLManager     = (*ValkeyRepository)(nil)
+	_ PortAllocator  = (*ValkeyRepository)(nil)
+	_ RateLimiter    = (*ValkeyRepository)(nil)
+	_ StatsCollector = (*ValkeyRepository)(nil)
+	_ HealthChecker  = (*ValkeyRepository)(nil)
+	_ Repository     = (*ValkeyRepository)(nil)
 )

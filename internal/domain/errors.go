@@ -35,4 +35,7 @@ var (
 
 	// ErrRouteCreationFailed is returned when Caddy route creation fails during acquisition.
 	ErrRouteCreationFailed = errors.New("failed to create route for instance")
+
+	// ErrMaxTTLExceeded is returned when a TTL extension would exceed the maximum allowed TTL.
+	ErrMaxTTLExceeded = errors.New("extension would exceed maximum TTL")
 )
