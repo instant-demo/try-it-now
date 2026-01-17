@@ -230,8 +230,9 @@ func NewValkeyRepository(cfg *config.StoreConfig, containerCfg *config.Container
 }
 
 // Close closes the Valkey connection.
-func (r *ValkeyRepository) Close() {
+func (r *ValkeyRepository) Close() error {
 	r.client.Close()
+	return nil
 }
 
 // InitializePorts pre-populates the available ports set if empty.

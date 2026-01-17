@@ -57,11 +57,11 @@ func TestLoad_DefaultValues(t *testing.T) {
 		if cfg.Container.CheckpointPath != "/var/lib/checkpoints/prestashop.tar.gz" {
 			t.Errorf("Container.CheckpointPath = %q, want %q", cfg.Container.CheckpointPath, "/var/lib/checkpoints/prestashop.tar.gz")
 		}
-		if cfg.Container.Image != "prestashop/prestashop-flashlight:9.0.0" {
-			t.Errorf("Container.Image = %q, want %q", cfg.Container.Image, "prestashop/prestashop-flashlight:9.0.0")
+		if cfg.Container.Image != "nginx:alpine" {
+			t.Errorf("Container.Image = %q, want %q", cfg.Container.Image, "nginx:alpine")
 		}
-		if cfg.Container.Network != "" {
-			t.Errorf("Container.Network = %q, want %q", cfg.Container.Network, "")
+		if cfg.Container.Network != "deployments_demo-net" {
+			t.Errorf("Container.Network = %q, want %q", cfg.Container.Network, "deployments_demo-net")
 		}
 		if cfg.Container.PortRangeStart != 32000 {
 			t.Errorf("Container.PortRangeStart = %d, want %d", cfg.Container.PortRangeStart, 32000)

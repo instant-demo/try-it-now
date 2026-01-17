@@ -115,8 +115,8 @@ func Load() *Config {
 		Container: ContainerConfig{
 			Mode:             getEnv("CONTAINER_MODE", "docker"),
 			CheckpointPath:   getEnv("CONTAINER_CHECKPOINT_PATH", "/var/lib/checkpoints/prestashop.tar.gz"),
-			Image:            getEnv("CONTAINER_IMAGE", "prestashop/prestashop-flashlight:9.0.0"),
-			Network:          getEnv("CONTAINER_NETWORK", ""),
+			Image:            getEnv("CONTAINER_IMAGE", "nginx:alpine"),
+			Network:          getEnv("CONTAINER_NETWORK", "deployments_demo-net"),
 			PortRangeStart:   getEnvInt("CONTAINER_PORT_RANGE_START", 32000),
 			PortRangeEnd:     getEnvInt("CONTAINER_PORT_RANGE_END", 32999),
 			PodmanSocketPath: getEnv("PODMAN_SOCKET_PATH", "unix:///run/podman/podman.sock"),

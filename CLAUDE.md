@@ -82,6 +82,8 @@ HTTP API (Gin)
 | `internal/proxy` | Caddy REST API integration |
 | `internal/store` | Valkey repository implementation |
 | `internal/queue` | Message queue interface (NATS planned) |
+| `internal/database` | PrestaShop database integration |
+| `internal/metrics` | Prometheus metrics collection |
 
 ## Key Implementation Details
 
