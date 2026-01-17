@@ -106,6 +106,10 @@ func (r *DockerRuntime) Start(ctx context.Context, opts StartOptions) (*domain.I
 		RestartPolicy: container.RestartPolicy{
 			Name: container.RestartPolicyUnlessStopped,
 		},
+		// Mount MySQL client config to disable SSL (required for prestashop-flashlight)
+		Binds: []string{
+			"/etc/mysql-client-no-ssl.cnf:/etc/my.cnf.d/disable-ssl.cnf:ro",
+		},
 	}
 
 	// Network config
