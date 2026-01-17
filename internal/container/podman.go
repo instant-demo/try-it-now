@@ -333,21 +333,21 @@ func (r *PodmanRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 }
 
 // buildEnvVars constructs environment variables for PrestaShop container.
-// WARNING: Contains sensitive data (DB_PASSWD, ADMIN_PASSWD). Never log this output.
+// WARNING: Contains sensitive data (MYSQL_PASSWORD, ADMIN_PASSWORD_OVERRIDE). Never log this output.
+// Uses prestashop-flashlight env var names (MYSQL_* prefix).
 func (r *PodmanRuntime) buildEnvVars(opts StartOptions) map[string]string {
 	env := map[string]string{
-		"PS_DOMAIN":         fmt.Sprintf("%s.%s", opts.Hostname, r.proxyCfg.BaseDomain),
-		"PS_ENABLE_SSL":     "1",
-		"PS_FOLDER_ADMIN":   r.psCfg.AdminPath,
-		"PS_FOLDER_INSTALL": "install-disabled",
-		"DB_SERVER":         r.psCfg.DBHost,
-		"DB_PORT":           strconv.Itoa(r.psCfg.DBPort),
-		"DB_NAME":           r.psCfg.DBName,
-		"DB_USER":           r.psCfg.DBUser,
-		"DB_PASSWD":         r.psCfg.DBPassword,
-		"DB_PREFIX":         opts.DBPrefix,
-		"ADMIN_MAIL":        r.psCfg.DemoUser,
-		"ADMIN_PASSWD":      r.psCfg.DemoPass,
+		// Required by prestashop-flashlight
+		"PS_DOMAIN": fmt.Sprintf("%s.%s", opts.Hostname, r.proxyCfg.BaseDomain),
+		// Database connection (prestashop-flashlight uses MYSQL_* prefix)
+		"MYSQL_HOST":     r.psCfg.DBHost,
+		"MYSQL_PORT":     strconv.Itoa(r.psCfg.DBPort),
+		"MYSQL_DATABASE": r.psCfg.DBName,
+		"MYSQL_USER":     r.psCfg.DBUser,
+		"MYSQL_PASSWORD": r.psCfg.DBPassword,
+		// Admin credentials override
+		"ADMIN_MAIL_OVERRIDE":     r.psCfg.DemoUser,
+		"ADMIN_PASSWORD_OVERRIDE": r.psCfg.DemoPass,
 	}
 
 	// Add custom env vars

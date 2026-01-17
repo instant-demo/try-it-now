@@ -284,19 +284,15 @@ func TestPodmanRuntime_BuildEnvVars(t *testing.T) {
 	env := runtime.buildEnvVars(opts)
 
 	expected := map[string]string{
-		"PS_DOMAIN":         "demo-abc.example.com",
-		"PS_ENABLE_SSL":     "1",
-		"PS_FOLDER_ADMIN":   "admin123",
-		"PS_FOLDER_INSTALL": "install-disabled",
-		"DB_SERVER":         "db.example.com",
-		"DB_PORT":           "3306",
-		"DB_NAME":           "testdb",
-		"DB_USER":           "testuser",
-		"DB_PASSWD":         "testpass",
-		"DB_PREFIX":         "abc_",
-		"ADMIN_MAIL":        "demo@test.com",
-		"ADMIN_PASSWD":      "demopass",
-		"CUSTOM_VAR":        "custom_value",
+		"PS_DOMAIN":               "demo-abc.example.com",
+		"MYSQL_HOST":              "db.example.com",
+		"MYSQL_PORT":              "3306",
+		"MYSQL_DATABASE":          "testdb",
+		"MYSQL_USER":              "testuser",
+		"MYSQL_PASSWORD":          "testpass",
+		"ADMIN_MAIL_OVERRIDE":     "demo@test.com",
+		"ADMIN_PASSWORD_OVERRIDE": "demopass",
+		"CUSTOM_VAR":              "custom_value",
 	}
 
 	for k, want := range expected {

@@ -230,21 +230,21 @@ func (r *DockerRuntime) HealthCheck(ctx context.Context, containerID string) (bo
 }
 
 // buildEnvVars constructs the environment variables for a PrestaShop container.
-// WARNING: Contains sensitive data (DB_PASSWD, ADMIN_PASSWD). Never log this output.
+// WARNING: Contains sensitive data (MYSQL_PASSWORD, ADMIN_PASSWORD_OVERRIDE). Never log this output.
+// Uses prestashop-flashlight env var names (MYSQL_* prefix).
 func (r *DockerRuntime) buildEnvVars(opts StartOptions) []string {
 	env := []string{
+		// Required by prestashop-flashlight
 		fmt.Sprintf("PS_DOMAIN=%s.%s", opts.Hostname, r.proxyCfg.BaseDomain),
-		fmt.Sprintf("PS_ENABLE_SSL=1"),
-		fmt.Sprintf("PS_FOLDER_ADMIN=%s", r.psCfg.AdminPath),
-		fmt.Sprintf("PS_FOLDER_INSTALL=install-disabled"),
-		fmt.Sprintf("DB_SERVER=%s", r.psCfg.DBHost),
-		fmt.Sprintf("DB_PORT=%d", r.psCfg.DBPort),
-		fmt.Sprintf("DB_NAME=%s", r.psCfg.DBName),
-		fmt.Sprintf("DB_USER=%s", r.psCfg.DBUser),
-		fmt.Sprintf("DB_PASSWD=%s", r.psCfg.DBPassword),
-		fmt.Sprintf("DB_PREFIX=%s", opts.DBPrefix),
-		fmt.Sprintf("ADMIN_MAIL=%s", r.psCfg.DemoUser),
-		fmt.Sprintf("ADMIN_PASSWD=%s", r.psCfg.DemoPass),
+		// Database connection (prestashop-flashlight uses MYSQL_* prefix)
+		fmt.Sprintf("MYSQL_HOST=%s", r.psCfg.DBHost),
+		fmt.Sprintf("MYSQL_PORT=%d", r.psCfg.DBPort),
+		fmt.Sprintf("MYSQL_DATABASE=%s", r.psCfg.DBName),
+		fmt.Sprintf("MYSQL_USER=%s", r.psCfg.DBUser),
+		fmt.Sprintf("MYSQL_PASSWORD=%s", r.psCfg.DBPassword),
+		// Admin credentials override
+		fmt.Sprintf("ADMIN_MAIL_OVERRIDE=%s", r.psCfg.DemoUser),
+		fmt.Sprintf("ADMIN_PASSWORD_OVERRIDE=%s", r.psCfg.DemoPass),
 	}
 
 	// Add any custom env vars from options
