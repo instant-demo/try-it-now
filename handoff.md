@@ -1,123 +1,133 @@
-## Context
+# Production Deployment Handoff
 
-Phase 1 of the PrestaShop Try It Now is complete. The system is now ready for integration testing with Docker and Valkey running.
+## Session Summary (2026-01-17)
 
-## What's Done (Phase 1 Complete)
+First production deployment attempt to Hetzner server (Ubuntu 24.04). **MySQL SSL issue resolved** by upgrading to MariaDB 11.4.
 
-### Project Structure ✅
-- Go module initialized (`github.com/boss/try-it-now`)
-- Full directory structure created per plan
-- Git repository initialized with clean commit history
+## Server Details
 
-### Core Implementations ✅
+- **Server**: Hetzner CPX42 (8 vCPU, 16GB RAM, 320GB disk)
+- **IP**: 46.62.223.166
+- **Domain**: demo.migration-pro.com
+- **User**: edosh (sudo user created)
+- **Location**: Helsinki, Finland (hel1-dc2)
 
-| Component | File | Status |
-|-----------|------|--------|
-| Valkey Repository | `internal/store/valkey.go` | ✅ Complete |
-| Docker Runtime | `internal/container/docker.go` | ✅ Complete |
-| Caddy Route Manager | `internal/proxy/caddy.go` | ✅ Complete |
-| Pool Manager | `internal/pool/impl.go` | ✅ Complete |
-| API Handlers | `internal/api/handler.go` | ✅ Complete |
+## What's Working
 
-### Features Implemented
+1. **Server Setup** - Docker, Go 1.22 installed
+2. **Infrastructure** - All containers running:
+   - Caddy (ports 80, 443, 2019)
+   - Valkey (port 6379) - healthy
+   - NATS (ports 4222, 8222)
+   - MariaDB 11.4 (port 3306) - healthy, auto-generated TLS certs
+3. **DNS** - Configured in Cloudflare:
+   - `demo.migration-pro.com` → 46.62.223.166 (DNS only)
+   - `*.demo.migration-pro.com` → 46.62.223.166 (DNS only)
+4. **TLS Certificates** - Caddy obtained cert for `demo.migration-pro.com` via ZeroSSL
+5. **Go Application** - Builds and runs, connects to Valkey and NATS
+6. **PrestaShop Container** - Starts and connects to DB via PDO (PHP)
 
-**Valkey Repository** (`internal/store/valkey.go`):
-- Instance CRUD with JSON serialization
-- Atomic pool operations (LPUSH/LPOP)
-- State tracking via Redis sets
-- Port allocation with SPOP/SADD
-- Rate limiting with hourly/daily counters
-- Pool statistics aggregation
+## Resolved: MySQL SSL Issue
 
-**Docker Runtime** (`internal/container/docker.go`):
-- Container start with port mapping
-- Container stop and cleanup
-- Health checks via HTTP
-- Environment configuration for PrestaShop
+**Problem:** The prestashop-flashlight container's MariaDB 11.x client requires SSL by default, but MariaDB 10.11 server didn't support it.
 
-**Caddy Route Manager** (`internal/proxy/caddy.go`):
-- Dynamic route addition via Caddy admin API
-- Route removal and listing
-- Uses @id for efficient targeting
+**Solution:** Upgraded MariaDB from 10.11 to 11.4. MariaDB 11.4+ auto-generates TLS certificates on startup, so both client and server now have matching SSL expectations.
 
-**Pool Manager** (`internal/pool/impl.go`):
-- Instant acquire from warm pool
-- Release with full cleanup (route, container, port)
-- Background replenisher loop
-- Expired instance cleanup
+**Changes made:**
+1. Updated `deployments/docker-compose.yml` → `mariadb:11.4`
+2. Updated `deployments/production/docker-compose.yml` → `mariadb:11.4`
+3. Removed SSL config mount hack from `internal/container/docker.go`
 
-**API Endpoints** (`internal/api/handler.go`):
-- `POST /api/v1/demo/acquire` - Get demo instance (rate limited)
-- `GET /api/v1/demo/:id` - Get instance details
-- `POST /api/v1/demo/:id/extend` - Extend TTL
-- `DELETE /api/v1/demo/:id` - Early release
-- `GET /api/v1/demo/:id/status` - SSE TTL countdown
-- `GET /api/v1/pool/stats` - Pool statistics
-- `GET /metrics` - Prometheus metrics
-- `GET /health` - Health check
+## Files Changed This Session
 
-### Tests ✅ (All Passing)
-- 60+ tests across all packages
-- Mock implementations for unit testing
-- Integration tests (skip when dependencies unavailable)
+All committed and pushed to `main`:
+
+1. `deployments/production/Caddyfile` - Production Caddy config
+2. `deployments/production/docker-compose.yml` - Production docker-compose
+3. `deployments/production/.env.production` - Production env template
+4. `deployments/production/try-it-now.service` - Systemd service file
+5. `internal/container/docker.go` - Updated env vars for prestashop-flashlight (MYSQL_* prefix), added no-redirect health check
+6. `internal/container/podman.go` - Same env var updates
+
+## Server State
 
 ```bash
-go test ./...
-# All packages pass
+# Location
+/home/edosh/projects/try-it-now
+
+# Infrastructure running from
+/home/edosh/projects/try-it-now/deployments
+
+# Docker network
+deployments_demo-net  # All containers connected
+
+# Cleanup: Remove orphaned config file
+sudo rm /etc/mysql-client-no-ssl.cnf
 ```
 
-## How to Run
+## Commands to Resume
 
 ```bash
-# Start infrastructure
-make infra-up
+# SSH to server
+ssh edosh@46.62.223.166
 
-# Wait for services to be ready
-make infra-logs  # Check logs
+# Check infrastructure
+cd ~/projects/try-it-now/deployments
+docker compose ps
 
-# Run in dev mode
-make dev
+# View logs
+docker logs deployments-mariadb-1
+docker logs deployments-caddy-1
 
-# In another terminal, test endpoints:
-curl http://localhost:8080/health
-curl http://localhost:8080/api/v1/pool/stats
-curl -X POST http://localhost:8080/api/v1/demo/acquire
+# Run app
+cd ~/projects/try-it-now
+./build/try-it-now
+
+# Clean demo containers
+docker rm -f $(docker ps -aq --filter name=demo-demo) 2>/dev/null
 ```
 
-## What's Next (Phase 2)
+## Environment Variables Needed
 
-1. **Integration Testing**
-   - Run full system with Docker + Valkey + Caddy
-   - Verify warm pool provisioning works end-to-end
-   - Test rate limiting behavior
+The prestashop-flashlight image requires these env vars (set in buildEnvVars):
+- `PS_DOMAIN` - Full domain for the demo
+- `MYSQL_HOST` - Database hostname (use `mariadb` for docker network)
+- `MYSQL_PORT` - Database port
+- `MYSQL_DATABASE` - Database name
+- `MYSQL_USER` - Database user
+- `MYSQL_PASSWORD` - Database password
+- `ADMIN_MAIL_OVERRIDE` - Admin email
+- `ADMIN_PASSWORD_OVERRIDE` - Admin password
 
-2. **Podman + CRIU Mode** (for production)
-   - Implement `internal/container/podman.go`
-   - Add checkpoint restore functionality
-   - Achieve 50-200ms restore times
+## Health Check Fix Applied
 
-3. **NATS Integration** (optional)
-   - Implement `internal/queue/nats.go`
-   - Async provisioning via message queue
-
-4. **Production Hardening**
-   - TLS configuration for Caddy
-   - Proper logging with levels
-   - Metrics instrumentation
-   - Health check improvements
-
-## Git Log
-
-```
-3bc0af2 Wire up API handlers with Pool Manager and Repository
-fe0dfb9 Implement Pool Manager for warm pool orchestration
-3ed039b Implement Caddy Route Manager for dynamic reverse proxy
-3462d3d Implement Docker Runtime for container operations
-bb04093 Implement Valkey Repository for state persistence
-f46cc51 Initial commit: Phase 1 foundation for PrestaShop Try It Now
+The health check now uses `CheckRedirect` to not follow HTTP→HTTPS redirects:
+```go
+CheckRedirect: func(req *http.Request, via []*http.Request) error {
+    return http.ErrUseLastResponse
+}
 ```
 
-## Reference
+This is correct - a 302 response means the container is healthy.
 
-- Research: `research/second-research.md` (architecture decisions)
-- Beads issues: `.beads/` (all 5 issues closed)
+## Priority for Next Session
+
+1. ~~**Fix MySQL SSL issue**~~ - ✅ Resolved by upgrading to MariaDB 11.4
+2. **Deploy and verify** - Pull changes, recreate MariaDB volume, test container starts
+3. **Test full flow** - Acquire demo, verify it's accessible (should see "MySQL dump restored!" in logs)
+4. **Set up systemd service** - For production daemon
+5. **Configure firewall** - UFW rules for ports 80, 443, 22 only
+
+## Useful Debug Commands
+
+```bash
+# Test MariaDB connection from inside network
+docker run --rm --network deployments_demo-net mariadb:11.4 \
+  mysql -h mariadb -u prestashop -p'PASSWORD' -e "SELECT 1"
+
+# Check what user prestashop-flashlight runs as
+docker run --rm prestashop/prestashop-flashlight:9.0.0 whoami
+
+# View demo container logs
+docker logs <container-id>
+```

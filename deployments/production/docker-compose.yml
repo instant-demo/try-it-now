@@ -47,7 +47,7 @@ services:
       retries: 3
 
   mariadb:
-    image: mariadb:10.11
+    image: mariadb:11.4
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${PS_DB_ROOT_PASSWORD}

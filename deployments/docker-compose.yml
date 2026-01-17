@@ -43,7 +43,7 @@ services:
       retries: 3
 
   mariadb:
-    image: mariadb:10.11
+    image: mariadb:11.4
     environment:
       MYSQL_ROOT_PASSWORD: rootpass
       MYSQL_DATABASE: prestashop_demos
