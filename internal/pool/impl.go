@@ -97,8 +97,10 @@ func (m *PoolManager) Acquire(ctx context.Context) (*domain.Instance, error) {
 		return nil, fmt.Errorf("failed to set instance TTL: %w", err)
 	}
 	// Update in-memory instance to reflect the TTL we just set
+	// IMPORTANT: Must set ExpiresAtUnix too, as handler.SaveInstance may overwrite Valkey data
 	expiresAt := time.Now().Add(m.cfg.DefaultTTL)
 	instance.ExpiresAt = &expiresAt
+	instance.ExpiresAtUnix = expiresAt.Unix()
 
 	// Add route to proxy - FAIL if this fails, as instance won't be accessible
 	route := proxy.Route{

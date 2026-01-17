@@ -383,6 +383,7 @@ func (h *Handler) extendDemo(c *gin.Context) {
 			})
 			return
 		}
+		h.logger.Error("Failed to extend TTL", "instanceID", id, "error", err)
 		c.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error: "Failed to extend TTL",
 			Code:  "EXTEND_ERROR",
