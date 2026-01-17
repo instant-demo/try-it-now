@@ -107,8 +107,9 @@ func (r *DockerRuntime) Start(ctx context.Context, opts StartOptions) (*domain.I
 			Name: container.RestartPolicyUnlessStopped,
 		},
 		// Mount MySQL client config to disable SSL (required for prestashop-flashlight)
+		// Mount to /root/.my.cnf which mysql CLI always reads
 		Binds: []string{
-			"/etc/mysql-client-no-ssl.cnf:/etc/my.cnf.d/disable-ssl.cnf:ro",
+			"/etc/mysql-client-no-ssl.cnf:/root/.my.cnf:ro",
 		},
 	}
 
