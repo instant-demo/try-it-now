@@ -133,8 +133,9 @@ Environment variables loaded from `.env` (see `.env.example`):
 - **Valkey 8** (Redis-compatible state store)
 - **Docker** (container runtime, Podman+CRIU planned)
 - **Caddy 2** (dynamic reverse proxy)
-- **MariaDB 10.11** (shared PrestaShop database)
-- **prestashop/prestashop-flashlight:9.0.0** (fast-boot PrestaShop image)
+- **MariaDB 11** (optional, for apps needing shared database)
+
+**Container Image:** Configurable via `CONTAINER_IMAGE` env var. Default: `nginx:alpine` (dev), `prestashop/prestashop-flashlight:9.0.0` (prod example). Works with any containerized application.
 
 ## Issue Tracking
 
