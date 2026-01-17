@@ -9,12 +9,114 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 const defaultBaseURL = "http://localhost:8080"
+
+// acquiredInstances tracks all instances acquired during tests for cleanup
+var (
+	acquiredInstances   []string
+	acquiredInstancesMu sync.Mutex
+)
+
+// trackInstance adds an instance ID to the cleanup list
+func trackInstance(id string) {
+	acquiredInstancesMu.Lock()
+	defer acquiredInstancesMu.Unlock()
+	acquiredInstances = append(acquiredInstances, id)
+}
+
+// untrackInstance removes an instance ID from the cleanup list (already released)
+func untrackInstance(id string) {
+	acquiredInstancesMu.Lock()
+	defer acquiredInstancesMu.Unlock()
+	for i, tracked := range acquiredInstances {
+		if tracked == id {
+			acquiredInstances = append(acquiredInstances[:i], acquiredInstances[i+1:]...)
+			return
+		}
+	}
+}
+
+// TestMain runs before/after all tests for global setup and cleanup
+func TestMain(m *testing.M) {
+	code := m.Run()
+
+	// Cleanup any instances that weren't released via API
+	cleanupRemainingInstances()
+
+	os.Exit(code)
+}
+
+// cleanupRemainingInstances releases any tracked instances via API, then cleans orphan containers
+func cleanupRemainingInstances() {
+	acquiredInstancesMu.Lock()
+	remaining := make([]string, len(acquiredInstances))
+	copy(remaining, acquiredInstances)
+	acquiredInstancesMu.Unlock()
+
+	if len(remaining) == 0 {
+		return
+	}
+
+	fmt.Printf("\n[E2E Cleanup] Releasing %d tracked instances...\n", len(remaining))
+
+	// Try to release via API first
+	c := &client{
+		base: getBaseURL(),
+		http: &http.Client{Timeout: 5 * time.Second},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, id := range remaining {
+		if _, err := c.release(ctx, id); err != nil {
+			fmt.Printf("[E2E Cleanup] Failed to release %s via API: %v\n", id, err)
+		} else {
+			fmt.Printf("[E2E Cleanup] Released %s\n", id)
+		}
+	}
+
+	// Also clean any orphan demo containers directly (fallback if server is down)
+	cleanupOrphanContainers()
+}
+
+// cleanupOrphanContainers removes demo containers directly via docker CLI
+func cleanupOrphanContainers() {
+	// Only run if E2E_CLEANUP_CONTAINERS is set (opt-in to avoid accidents)
+	if os.Getenv("E2E_CLEANUP_CONTAINERS") == "" {
+		return
+	}
+
+	fmt.Println("[E2E Cleanup] Checking for orphan demo containers...")
+	cmd := exec.Command("docker", "ps", "-q", "--filter", "name=demo-demo-")
+	output, err := cmd.Output()
+	if err != nil {
+		return
+	}
+
+	containers := strings.TrimSpace(string(output))
+	if containers == "" {
+		fmt.Println("[E2E Cleanup] No orphan containers found")
+		return
+	}
+
+	ids := strings.Split(containers, "\n")
+	fmt.Printf("[E2E Cleanup] Removing %d orphan containers...\n", len(ids))
+
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		exec.Command("docker", "rm", "-f", id).Run()
+	}
+	fmt.Println("[E2E Cleanup] Orphan containers removed")
+}
 
 // Response types matching internal/api/handler.go
 
@@ -115,6 +217,8 @@ func (c *client) acquire(ctx context.Context) (*AcquireResponse, error) {
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
+	// Track for cleanup if test fails or server dies
+	trackInstance(result.ID)
 	return &result, nil
 }
 
@@ -171,6 +275,10 @@ func (c *client) release(ctx context.Context, id string) (int, error) {
 	}
 	defer resp.Body.Close()
 	io.ReadAll(resp.Body)
+	// Untrack on successful release (200 or 404 means it's gone)
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+		untrackInstance(id)
+	}
 	return resp.StatusCode, nil
 }
 
