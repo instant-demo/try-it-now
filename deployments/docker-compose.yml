@@ -14,6 +14,16 @@ services:
 
   valkey:
     image: valkey/valkey:8-alpine
+    command: >
+      sh -c '
+        if [ -n "$${VALKEY_PASSWORD}" ]; then
+          valkey-server --requirepass "$${VALKEY_PASSWORD}"
+        else
+          valkey-server
+        fi
+      '
+    environment:
+      VALKEY_PASSWORD: ${VALKEY_PASSWORD:-}
     ports:
       - "6379:6379"
     volumes:
@@ -21,7 +31,14 @@ services:
     networks:
       - demo-net
     healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
+      test: >
+        sh -c '
+          if [ -n "$${VALKEY_PASSWORD}" ]; then
+            valkey-cli -a "$${VALKEY_PASSWORD}" ping
+          else
+            valkey-cli ping
+          fi
+        '
       interval: 5s
       timeout: 3s
       retries: 3
@@ -56,10 +73,11 @@ services:
     networks:
       - demo-net
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD", "healthcheck.sh", "--defaults-extra-file=/var/lib/mysql/.my-healthcheck.cnf", "--connect", "--innodb_initialized"]
       interval: 10s
       timeout: 5s
-      retries: 3
+      retries: 5
+      start_period: 30s
 
 networks:
   demo-net:
