@@ -55,6 +55,11 @@ func NewPodmanRuntime(cfg *config.ContainerConfig, psCfg *config.PrestaShopConfi
 				MaxIdleConnsPerHost: 10,
 				IdleConnTimeout:     30 * time.Second,
 			},
+			// Don't follow redirects - a 302 response means the container is healthy
+			// (PrestaShop redirects HTTP to HTTPS which we can't follow without valid certs)
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 	}
 
