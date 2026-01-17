@@ -45,10 +45,10 @@ services:
   mariadb:
     image: mariadb:11.4
     environment:
-      MYSQL_ROOT_PASSWORD: rootpass
-      MYSQL_DATABASE: prestashop_demos
-      MYSQL_USER: demo
-      MYSQL_PASSWORD: devpass
+      MYSQL_ROOT_PASSWORD: ${PS_DB_ROOT_PASSWORD:-rootpass}
+      MYSQL_DATABASE: ${PS_DB_NAME:-prestashop_demos}
+      MYSQL_USER: ${PS_DB_USER:-demo}
+      MYSQL_PASSWORD: ${PS_DB_PASSWORD:-devpass}
     ports:
       - "3306:3306"
     volumes:
