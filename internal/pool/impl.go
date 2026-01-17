@@ -490,5 +490,11 @@ func (m *PoolManager) generateDBPrefix() string {
 	return fmt.Sprintf("d%s_", strings.ReplaceAll(id[:8], "-", ""))
 }
 
+// ProvisionOne provisions a single instance and adds it to the pool.
+// This method is used by the queue handlers to process provision tasks.
+func (m *PoolManager) ProvisionOne(ctx context.Context) error {
+	return m.provisionInstance(ctx)
+}
+
 // Compile-time check that PoolManager implements Manager
 var _ Manager = (*PoolManager)(nil)

@@ -69,31 +69,6 @@ func main() {
 	defer publisher.Close()
 	logger.Info("Connected to NATS JetStream")
 
-	// Create NATS Consumer with stub handlers
-	// TODO: Replace with real handlers that call poolMgr methods
-	queueLogger := logger.With("component", "queue")
-	provisionHandler := func(ctx context.Context, task queue.ProvisionTask) error {
-		queueLogger.Debug("Provision handler called", "taskID", task.TaskID, "priority", task.Priority)
-		return nil
-	}
-	cleanupHandler := func(ctx context.Context, task queue.CleanupTask) error {
-		queueLogger.Debug("Cleanup handler called", "instanceID", task.InstanceID, "containerID", task.ContainerID)
-		return nil
-	}
-
-	consumer, err := queue.NewNATSConsumer(&cfg.Queue, provisionHandler, cleanupHandler, logger)
-	if err != nil {
-		logger.Fatal("Failed to create NATS consumer", "error", err)
-	}
-	if err := consumer.Start(ctx); err != nil {
-		logger.Fatal("Failed to start NATS consumer", "error", err)
-	}
-	defer func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		consumer.Stop(stopCtx)
-	}()
-
 	// Create container runtime based on configuration
 	var runtime container.Runtime
 	var runtimeCloser func() error
@@ -145,6 +120,22 @@ func main() {
 		logger,
 		metricsCollector,
 	)
+
+	// Create NATS Consumer with real handlers
+	handlers := queue.NewHandlers(poolMgr, runtime, psDB, proxyMgr, repo, logger)
+	consumer, err := queue.NewNATSConsumer(&cfg.Queue, handlers.ProvisionHandler, handlers.CleanupHandler, logger)
+	if err != nil {
+		logger.Fatal("Failed to create NATS consumer", "error", err)
+	}
+	if err := consumer.Start(ctx); err != nil {
+		logger.Fatal("Failed to start NATS consumer", "error", err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		consumer.Stop(stopCtx)
+	}()
+	logger.Info("Started NATS consumer with real handlers")
 
 	// Start pool replenisher
 	if err := poolMgr.StartReplenisher(ctx); err != nil {

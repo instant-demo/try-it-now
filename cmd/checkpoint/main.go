@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +26,36 @@ import (
 	"strings"
 	"time"
 )
+
+// CheckpointMetadata contains version and provenance information for a checkpoint.
+// This metadata is saved alongside the checkpoint file for validation on restore.
+type CheckpointMetadata struct {
+	// Version of the metadata format
+	Version string `json:"version"`
+
+	// Image is the container image used to create the checkpoint
+	Image string `json:"image"`
+
+	// ImageDigest is the full digest of the image (sha256:...)
+	ImageDigest string `json:"image_digest,omitempty"`
+
+	// CreatedAt is when the checkpoint was created
+	CreatedAt time.Time `json:"created_at"`
+
+	// CRIUVersion is the CRIU version used
+	CRIUVersion string `json:"criu_version,omitempty"`
+
+	// PodmanVersion is the Podman version used
+	PodmanVersion string `json:"podman_version,omitempty"`
+
+	// Host information
+	Host string `json:"host,omitempty"`
+
+	// Database configuration (sanitized - no passwords)
+	DBHost     string `json:"db_host,omitempty"`
+	DBName     string `json:"db_name,omitempty"`
+	DBPrefix   string `json:"db_prefix,omitempty"`
+}
 
 type config struct {
 	// Container settings
@@ -89,6 +120,12 @@ func main() {
 		log.Fatalf("Failed to create checkpoint: %v", err)
 	}
 
+	// Step 5b: Generate metadata file
+	log.Printf("Step 5b: Generating checkpoint metadata...")
+	if err := generateMetadata(cfg); err != nil {
+		log.Printf("  Warning: Failed to generate metadata: %v", err)
+	}
+
 	// Step 6: Cleanup (checkpoint command stops the container)
 	if !cfg.keepContainer {
 		log.Printf("Step 6: Cleaning up container...")
@@ -103,6 +140,9 @@ func main() {
 		log.Printf("Success! Checkpoint created:")
 		log.Printf("  Path: %s", cfg.checkpointPath)
 		log.Printf("  Size: %.2f MB", float64(info.Size())/(1024*1024))
+		if _, err := os.Stat(cfg.checkpointPath + ".json"); err == nil {
+			log.Printf("  Metadata: %s.json", cfg.checkpointPath)
+		}
 		log.Printf("")
 		log.Printf("To restore:")
 		log.Printf("  podman container restore --import=%s --name=demo-test", cfg.checkpointPath)
@@ -266,4 +306,84 @@ func cleanupContainer(name string) {
 	exec.Command("podman", "stop", name).Run()
 	// Remove container
 	exec.Command("podman", "rm", "-f", name).Run()
+}
+
+// generateMetadata creates a metadata file alongside the checkpoint.
+func generateMetadata(cfg *config) error {
+	meta := CheckpointMetadata{
+		Version:   "1.0",
+		Image:     cfg.image,
+		CreatedAt: time.Now().UTC(),
+		DBHost:    cfg.mysqlHost,
+		DBName:    cfg.mysqlDB,
+		DBPrefix:  cfg.dbPrefix,
+	}
+
+	// Get image digest
+	if digest, err := getImageDigest(cfg.image); err == nil {
+		meta.ImageDigest = digest
+	}
+
+	// Get CRIU version
+	if ver, err := getCRIUVersion(); err == nil {
+		meta.CRIUVersion = ver
+	}
+
+	// Get Podman version
+	if ver, err := getPodmanVersion(); err == nil {
+		meta.PodmanVersion = ver
+	}
+
+	// Get hostname
+	if host, err := os.Hostname(); err == nil {
+		meta.Host = host
+	}
+
+	// Write metadata file
+	metaPath := cfg.checkpointPath + ".json"
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write metadata: %w", err)
+	}
+
+	log.Printf("  Metadata saved: %s", metaPath)
+	return nil
+}
+
+// getImageDigest returns the digest of a container image.
+func getImageDigest(image string) (string, error) {
+	cmd := exec.Command("podman", "image", "inspect", "--format", "{{.Digest}}", image)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// getCRIUVersion returns the installed CRIU version.
+func getCRIUVersion() (string, error) {
+	cmd := exec.Command("criu", "--version")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(string(out), "\n")
+	if len(lines) > 0 {
+		return strings.TrimSpace(lines[0]), nil
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// getPodmanVersion returns the installed Podman version.
+func getPodmanVersion() (string, error) {
+	cmd := exec.Command("podman", "--version")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
