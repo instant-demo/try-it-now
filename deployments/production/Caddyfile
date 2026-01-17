@@ -4,6 +4,13 @@
 
 	# Production: automatic HTTPS via Let's Encrypt
 	email admin@migration-pro.com
+
+	# On-demand TLS for dynamic demo subdomains
+	# Individual certs are issued per subdomain (no wildcard needed)
+	on_demand_tls {
+		# Allow any subdomain of demo.migration-pro.com
+		# The app manages which routes are active via admin API
+	}
 }
 
 # Main API endpoint
@@ -28,9 +35,13 @@ demo.migration-pro.com {
 	}
 }
 
-# Wildcard for dynamic demo subdomains
+# Dynamic demo subdomains - routes added via admin API
+# This is a catch-all that uses on-demand TLS
 *.demo.migration-pro.com {
-	# These routes are managed dynamically via admin API
-	# Fallback for unmatched subdomains
+	tls {
+		on_demand
+	}
+
+	# Fallback for subdomains without a specific route
 	respond "Demo not found or expired" 404
 }
