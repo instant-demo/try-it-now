@@ -3,10 +3,12 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/instant-demo/try-it-now/internal/config"
@@ -395,5 +397,88 @@ func TestCaddyRouteManager_AddAndRemoveRoute_Integration(t *testing.T) {
 	_, err = manager.GetRoute(ctx, route.Hostname)
 	if err != domain.ErrRouteNotFound {
 		t.Errorf("GetRoute() after remove error = %v, want %v", err, domain.ErrRouteNotFound)
+	}
+}
+
+func TestCaddyRouteManager_ConcurrentAddRoute(t *testing.T) {
+	// Track how many times the server was created (should be exactly once)
+	var serverCreateCount int
+	var mu sync.Mutex
+
+	// Create a mock Caddy server that tracks server creation attempts
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		switch {
+		case r.Method == http.MethodGet && path == "/config/apps/http/servers/demo":
+			// Server check - always return not found to trigger creation
+			mu.Lock()
+			count := serverCreateCount
+			mu.Unlock()
+			if count > 0 {
+				// After first creation, server exists
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(caddyServer{Listen: []string{":8443"}, Routes: []caddyRoute{}})
+			} else {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("null"))
+			}
+
+		case r.Method == http.MethodPut && path == "/config/apps/http/servers/demo":
+			mu.Lock()
+			serverCreateCount++
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/routes"):
+			w.WriteHeader(http.StatusOK)
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.ProxyConfig{
+		CaddyAdminURL: server.URL,
+		BaseDomain:    "test.local",
+	}
+	manager := NewCaddyRouteManager(cfg, nil)
+	ctx := context.Background()
+
+	// Launch multiple concurrent AddRoute calls
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	errors := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			route := Route{
+				Hostname:    fmt.Sprintf("demo-concurrent-%d", i),
+				UpstreamURL: fmt.Sprintf("http://localhost:%d", 8080+i),
+				InstanceID:  fmt.Sprintf("instance-%d", i),
+			}
+			if err := manager.AddRoute(ctx, route); err != nil {
+				errors <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for any errors
+	for err := range errors {
+		t.Errorf("AddRoute() error = %v", err)
+	}
+
+	// Verify server was created exactly once
+	mu.Lock()
+	count := serverCreateCount
+	mu.Unlock()
+	if count != 1 {
+		t.Errorf("Server was created %d times, want exactly 1", count)
 	}
 }

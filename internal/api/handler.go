@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,23 +14,35 @@ import (
 	"github.com/instant-demo/try-it-now/internal/metrics"
 	"github.com/instant-demo/try-it-now/internal/pool"
 	"github.com/instant-demo/try-it-now/internal/store"
+	"github.com/instant-demo/try-it-now/pkg/logging"
 )
+
+// SSEMaxDuration is the maximum time an SSE connection can remain open.
+// After this duration, the client must reconnect.
+const SSEMaxDuration = 30 * time.Minute
 
 // Handler holds the HTTP handlers and dependencies.
 type Handler struct {
-	cfg     *config.Config
-	pool    pool.Manager
-	store   store.Repository
-	metrics *metrics.Collector
+	cfg            *config.Config
+	pool           pool.Manager
+	store          store.Repository
+	metrics        *metrics.Collector
+	logger         *logging.Logger
+	sseMaxDuration time.Duration // Configurable for testing, defaults to SSEMaxDuration
 }
 
 // NewHandler creates a new API handler.
-func NewHandler(cfg *config.Config, poolMgr pool.Manager, repo store.Repository, m *metrics.Collector) *Handler {
+func NewHandler(cfg *config.Config, poolMgr pool.Manager, repo store.Repository, m *metrics.Collector, logger *logging.Logger) *Handler {
+	if logger == nil {
+		logger = logging.Nop()
+	}
 	return &Handler{
-		cfg:     cfg,
-		pool:    poolMgr,
-		store:   repo,
-		metrics: m,
+		cfg:            cfg,
+		pool:           poolMgr,
+		store:          repo,
+		metrics:        m,
+		logger:         logger,
+		sseMaxDuration: SSEMaxDuration,
 	}
 }
 
@@ -41,8 +54,9 @@ func (h *Handler) Router() *gin.Engine {
 	// Configure trusted proxies to prevent X-Forwarded-For spoofing.
 	// Only requests from these IPs will have X-Forwarded-For headers trusted.
 	if err := r.SetTrustedProxies(h.cfg.Server.TrustedProxies); err != nil {
-		// Log but continue - SetTrustedProxies only fails on invalid CIDR
-		// In practice, our defaults (127.0.0.1, ::1) are always valid
+		h.logger.Warn("Failed to set trusted proxies, IP detection may be unreliable",
+			"error", err,
+			"proxies", h.cfg.Server.TrustedProxies)
 	}
 
 	r.Use(gin.Recovery())
@@ -269,11 +283,15 @@ func (h *Handler) acquireDemo(c *gin.Context) {
 
 	// Rate limit was already incremented atomically above
 
-	// Set user IP on instance for audit/analytics purposes. Error ignored because
-	// instance is already successfully acquired - failing to persist the IP update
+	// Set user IP on instance for audit/analytics purposes.
+	// Instance is already successfully acquired - failing to persist the IP update
 	// does not affect user experience or instance functionality.
 	instance.UserIP = clientIP
-	_ = h.store.SaveInstance(ctx, instance)
+	if err := h.store.SaveInstance(ctx, instance); err != nil {
+		h.logger.Warn("Failed to save user IP on instance",
+			"instanceID", instance.ID,
+			"error", err)
+	}
 
 	// Build response
 	resp := AcquireResponse{
@@ -419,8 +437,11 @@ func (h *Handler) releaseDemo(c *gin.Context) {
 
 // demoStatus returns SSE stream for TTL countdown.
 func (h *Handler) demoStatus(c *gin.Context) {
-	ctx := c.Request.Context()
 	id := c.Param("id")
+
+	// Create a context with maximum SSE duration to prevent indefinite connections
+	ctx, cancel := context.WithTimeout(c.Request.Context(), h.sseMaxDuration)
+	defer cancel()
 
 	// Verify instance exists
 	instance, err := h.store.GetInstance(ctx, id)
@@ -452,6 +473,11 @@ func (h *Handler) demoStatus(c *gin.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				// Max duration reached, tell client to reconnect
+				c.SSEvent("reconnect", gin.H{"reason": "max duration reached"})
+				c.Writer.Flush()
+			}
 			return
 		case <-ticker.C:
 			// Refresh instance data

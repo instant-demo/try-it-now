@@ -17,11 +17,12 @@ import (
 
 // MockRepository implements store.Repository for testing.
 type MockRepository struct {
-	mu        sync.Mutex
-	instances map[string]*domain.Instance
-	pool      []string     // IDs in ready pool
-	ports     map[int]bool // true = in use
-	counters  map[string]int64
+	mu         sync.Mutex
+	instances  map[string]*domain.Instance
+	pool       []string     // IDs in ready pool
+	ports      map[int]bool // true = in use
+	counters   map[string]int64
+	failSetTTL bool // When true, SetInstanceTTL will return an error
 }
 
 func NewMockRepository() *MockRepository {
@@ -128,6 +129,9 @@ func (m *MockRepository) ListExpired(ctx context.Context) ([]*domain.Instance, e
 func (m *MockRepository) SetInstanceTTL(ctx context.Context, id string, ttl time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.failSetTTL {
+		return errors.New("mock TTL failure")
+	}
 	if inst, ok := m.instances[id]; ok {
 		exp := time.Now().Add(ttl)
 		inst.ExpiresAt = &exp
@@ -770,5 +774,69 @@ func TestPoolManager_ReplenishLoopContextCancellation(t *testing.T) {
 		// Good - loop exited properly
 	case <-time.After(2 * time.Second):
 		t.Error("replenishLoop did not exit after context cancellation")
+	}
+}
+
+// TestPoolManager_Acquire_TTLFailureReleasesInstance tests that when SetInstanceTTL fails,
+// the instance is released back and an error is returned. This verifies try-it-now-uca fix.
+func TestPoolManager_Acquire_TTLFailureReleasesInstance(t *testing.T) {
+	repo := NewMockRepository()
+	runtime := NewMockRuntime()
+	proxyMgr := NewMockRouteManager()
+
+	cfg := ManagerConfig{
+		TargetPoolSize: 5,
+		DefaultTTL:     time.Hour,
+		MaxTTL:         24 * time.Hour,
+	}
+
+	manager := NewPoolManager(cfg, repo, runtime, proxyMgr, nil, "nginx:alpine", "", "localhost", "", logging.Nop(), nil)
+
+	// Pre-populate pool with an instance
+	instance := &domain.Instance{
+		ID:          "test-ttl-fail-1",
+		ContainerID: "container-ttl-test",
+		Hostname:    "demo-ttl-test",
+		Port:        32000,
+		State:       domain.StateReady,
+		CreatedAt:   time.Now(),
+	}
+	repo.AddToPool(context.Background(), instance)
+	repo.ports[instance.Port] = true
+	runtime.containers[instance.ContainerID] = true
+
+	// Set TTL to fail
+	repo.failSetTTL = true
+
+	ctx := context.Background()
+
+	// Acquire should fail
+	acquired, err := manager.Acquire(ctx)
+	if err == nil {
+		t.Fatal("Acquire() should have failed when SetInstanceTTL fails")
+	}
+
+	if acquired != nil {
+		t.Error("Acquire() should return nil instance on failure")
+	}
+
+	// Verify the error message
+	if err.Error() != "failed to set instance TTL: mock TTL failure" {
+		t.Errorf("Unexpected error message: %v", err)
+	}
+
+	// Verify instance was released (deleted from repo)
+	if _, exists := repo.instances[instance.ID]; exists {
+		t.Error("Instance should have been released after TTL failure")
+	}
+
+	// Verify container was stopped
+	if runtime.containers[instance.ContainerID] {
+		t.Error("Container should have been stopped after TTL failure")
+	}
+
+	// Verify port was released
+	if repo.ports[instance.Port] {
+		t.Error("Port should have been released after TTL failure")
 	}
 }

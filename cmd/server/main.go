@@ -174,7 +174,7 @@ func main() {
 	defer cancelGauge()
 
 	// Create API handler
-	handler := api.NewHandler(cfg, poolMgr, repo, metricsCollector)
+	handler := api.NewHandler(cfg, poolMgr, repo, metricsCollector, logger)
 
 	// Create HTTP server
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

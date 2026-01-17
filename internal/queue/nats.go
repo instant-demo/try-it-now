@@ -299,6 +299,17 @@ func (c *NATSConsumer) runProvisionWorker(cons jetstream.Consumer, workerID int)
 		}
 
 		for msg := range msgs.Messages() {
+			// Check for stop signal before processing each message
+			select {
+			case <-c.stopCh:
+				// NAK so message gets redelivered to another worker
+				if err := msg.Nak(); err != nil {
+					c.logger.Warn("Failed to NAK provision message during shutdown", "workerID", workerID, "error", err)
+				}
+				return
+			default:
+				// Continue processing
+			}
 			c.processProvisionMessage(msg, workerID)
 		}
 
@@ -353,6 +364,17 @@ func (c *NATSConsumer) runCleanupWorker(cons jetstream.Consumer, workerID int) {
 		}
 
 		for msg := range msgs.Messages() {
+			// Check for stop signal before processing each message
+			select {
+			case <-c.stopCh:
+				// NAK so message gets redelivered to another worker
+				if err := msg.Nak(); err != nil {
+					c.logger.Warn("Failed to NAK cleanup message during shutdown", "workerID", workerID, "error", err)
+				}
+				return
+			default:
+				// Continue processing
+			}
 			c.processCleanupMessage(msg, workerID)
 		}
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/instant-demo/try-it-now/internal/config"
@@ -22,6 +23,10 @@ type CaddyRouteManager struct {
 	httpClient *http.Client
 	serverName string // The Caddy server name (e.g., "srv0")
 	metrics    *metrics.Collector
+
+	// serverOnce ensures server creation happens only once
+	serverOnce    sync.Once
+	serverInitErr error
 }
 
 // NewCaddyRouteManager creates a new Caddy-based route manager.
@@ -264,7 +269,18 @@ func (m *CaddyRouteManager) Health(ctx context.Context) error {
 }
 
 // ensureServerExists creates the demo server if it doesn't exist.
+// Uses sync.Once to ensure thread-safe initialization when multiple
+// concurrent AddRoute calls occur.
 func (m *CaddyRouteManager) ensureServerExists(ctx context.Context) error {
+	m.serverOnce.Do(func() {
+		m.serverInitErr = m.createServerIfNotExists(ctx)
+	})
+	return m.serverInitErr
+}
+
+// createServerIfNotExists checks if the server exists and creates it if not.
+// This is called only once via sync.Once.
+func (m *CaddyRouteManager) createServerIfNotExists(ctx context.Context) error {
 	url := fmt.Sprintf("%s/config/apps/http/servers/%s", m.adminURL, m.serverName)
 
 	// Check if server exists

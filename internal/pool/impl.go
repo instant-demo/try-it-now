@@ -85,15 +85,20 @@ func (m *PoolManager) Acquire(ctx context.Context) (*domain.Instance, error) {
 		return nil, err
 	}
 
-	// Set TTL
+	// Set TTL - fail if this fails to avoid zombie instances without expiry
 	if err := m.repo.SetInstanceTTL(ctx, instance.ID, m.cfg.DefaultTTL); err != nil {
-		// Log but don't fail - instance is already assigned
-		m.logger.Warn("Failed to set TTL for instance", "instanceID", instance.ID, "error", err)
-	} else {
-		// Update in-memory instance to reflect the TTL we just set
-		expiresAt := time.Now().Add(m.cfg.DefaultTTL)
-		instance.ExpiresAt = &expiresAt
+		m.logger.Error("Failed to set instance TTL, releasing instance",
+			"instanceID", instance.ID, "error", err)
+		// Compensate: return instance to pool
+		if releaseErr := m.Release(ctx, instance.ID); releaseErr != nil {
+			m.logger.Error("Failed to release instance after TTL failure",
+				"instanceID", instance.ID, "error", releaseErr)
+		}
+		return nil, fmt.Errorf("failed to set instance TTL: %w", err)
 	}
+	// Update in-memory instance to reflect the TTL we just set
+	expiresAt := time.Now().Add(m.cfg.DefaultTTL)
+	instance.ExpiresAt = &expiresAt
 
 	// Add route to proxy - FAIL if this fails, as instance won't be accessible
 	route := proxy.Route{

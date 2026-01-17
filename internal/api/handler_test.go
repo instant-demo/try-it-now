@@ -15,6 +15,7 @@ import (
 	"github.com/instant-demo/try-it-now/internal/metrics"
 	"github.com/instant-demo/try-it-now/internal/pool"
 	"github.com/instant-demo/try-it-now/internal/store"
+	"github.com/instant-demo/try-it-now/pkg/logging"
 )
 
 func init() {
@@ -275,7 +276,7 @@ func newTestHandlerWithAPIKey(apiKey string) (*Handler, *MockPoolManager, *MockR
 	}
 	poolMgr := NewMockPoolManager()
 	repo := NewMockRepository()
-	h := NewHandler(cfg, poolMgr, repo, nil) // nil metrics for tests
+	h := NewHandler(cfg, poolMgr, repo, nil, logging.Nop()) // nil metrics, nop logger for tests
 	return h, poolMgr, repo
 }
 
@@ -314,7 +315,7 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 	poolMgr := NewMockPoolManager()
 	repo := NewMockRepository()
-	h := NewHandler(cfg, poolMgr, repo, nil) // nil metrics for tests
+	h := NewHandler(cfg, poolMgr, repo, nil, nil) // nil metrics, nil logger for tests
 	router := h.Router()
 
 	w := httptest.NewRecorder()
@@ -474,7 +475,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	poolMgr := NewMockPoolManager()
 	repo := NewMockRepository()
 	metricsCollector := metrics.NewCollector()
-	h := NewHandler(cfg, poolMgr, repo, metricsCollector)
+	h := NewHandler(cfg, poolMgr, repo, metricsCollector, nil)
 	router := h.Router()
 
 	w := httptest.NewRecorder()
@@ -604,3 +605,116 @@ func containsStringHelper(s, substr string) bool {
 
 // Ensure MockPoolManager implements pool.Manager
 var _ pool.Manager = (*MockPoolManager)(nil)
+
+// TestDemoStatusSSE_MaxDuration verifies that SSE connections are terminated
+// after the maximum duration is reached, and a reconnect event is sent.
+func TestDemoStatusSSE_MaxDuration(t *testing.T) {
+	h, _, repo := newTestHandler()
+
+	// Override SSE max duration to a short value for testing
+	h.sseMaxDuration = 100 * time.Millisecond
+
+	// Add an instance that won't expire during the test
+	exp := time.Now().Add(1 * time.Hour)
+	repo.AddInstance(&domain.Instance{
+		ID:           "sse-test-123",
+		Hostname:     "demo-sse",
+		Port:         32000,
+		State:        domain.StateAssigned,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    &exp,
+		ExpiresAtUnix: exp.Unix(),
+	})
+
+	router := h.Router()
+
+	// Create request for SSE endpoint
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/v1/demo/sse-test-123/status", nil)
+
+	// Capture start time
+	start := time.Now()
+
+	// Make the request - this will block until timeout
+	router.ServeHTTP(w, req)
+
+	elapsed := time.Since(start)
+
+	// Verify the request completed within expected time (some tolerance for timing)
+	if elapsed < 90*time.Millisecond || elapsed > 300*time.Millisecond {
+		t.Errorf("expected request to complete in ~100ms, took %v", elapsed)
+	}
+
+	// Verify status code (should be 200 for SSE)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	// Verify the response contains the reconnect event
+	// Note: Gin SSE format uses "event:name" without space
+	body := w.Body.String()
+	if !containsString(body, "event:reconnect") {
+		t.Errorf("expected reconnect event in response, got: %s", body)
+	}
+	if !containsString(body, "max duration reached") {
+		t.Errorf("expected 'max duration reached' in response, got: %s", body)
+	}
+}
+
+// TestDemoStatusSSE_NotFound verifies 404 for non-existent instances.
+func TestDemoStatusSSE_NotFound(t *testing.T) {
+	h, _, _ := newTestHandler()
+	router := h.Router()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/v1/demo/nonexistent/status", nil)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status %d, got %d", http.StatusNotFound, w.Code)
+	}
+}
+
+// TestDemoStatusSSE_StreamsTTLUpdates verifies that TTL updates are streamed.
+func TestDemoStatusSSE_StreamsTTLUpdates(t *testing.T) {
+	h, _, repo := newTestHandler()
+
+	// Use a short timeout so test doesn't hang
+	h.sseMaxDuration = 2500 * time.Millisecond
+
+	// Add an instance with known TTL
+	exp := time.Now().Add(1 * time.Hour)
+	repo.AddInstance(&domain.Instance{
+		ID:           "sse-ttl-test",
+		Hostname:     "demo-ttl",
+		Port:         32001,
+		State:        domain.StateAssigned,
+		CreatedAt:    time.Now(),
+		ExpiresAt:    &exp,
+		ExpiresAtUnix: exp.Unix(),
+	})
+
+	router := h.Router()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/v1/demo/sse-ttl-test/status", nil)
+	router.ServeHTTP(w, req)
+
+	body := w.Body.String()
+
+	// Should contain at least one TTL event
+	// Note: Gin SSE format uses "event:name" without space
+	if !containsString(body, "event:ttl") {
+		t.Errorf("expected ttl event in response, got: %s", body)
+	}
+
+	// Should contain instance ID in the event data
+	if !containsString(body, "sse-ttl-test") {
+		t.Errorf("expected instance ID in response, got: %s", body)
+	}
+
+	// Should eventually get reconnect due to max duration
+	if !containsString(body, "event:reconnect") {
+		t.Errorf("expected reconnect event after max duration, got: %s", body)
+	}
+}
