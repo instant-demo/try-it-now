@@ -129,8 +129,8 @@ func TestPrestaShopDB_UpdateDomain(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create test tables with a unique prefix
-	testPrefix := "test_update_domain_"
+	// Create test tables with a valid prefix (d + 8 hex chars + _)
+	testPrefix := "d00000001_"
 	if err := createTestTables(ctx, db, testPrefix); err != nil {
 		t.Fatalf("Failed to create test tables: %v", err)
 	}
@@ -178,8 +178,8 @@ func TestPrestaShopDB_ClearCaches(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create test cache tables
-	testPrefix := "test_clear_cache_"
+	// Create test cache tables with a valid prefix
+	testPrefix := "d00000002_"
 	if err := createCacheTables(ctx, db, testPrefix); err != nil {
 		t.Fatalf("Failed to create cache tables: %v", err)
 	}
@@ -211,8 +211,8 @@ func TestPrestaShopDB_DropPrefixedTables(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create test tables with unique prefix
-	testPrefix := "test_drop_tables_"
+	// Create test tables with valid prefix
+	testPrefix := "d00000003_"
 	if err := createTestTables(ctx, db, testPrefix); err != nil {
 		t.Fatalf("Failed to create test tables: %v", err)
 	}
@@ -248,8 +248,8 @@ func TestPrestaShopDB_DropPrefixedTables_NoTables(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Drop non-existent tables should not error
-	if err := db.DropPrefixedTables(ctx, "nonexistent_prefix_"); err != nil {
+	// Drop non-existent tables should not error (use valid prefix format)
+	if err := db.DropPrefixedTables(ctx, "d00000099_"); err != nil {
 		t.Errorf("DropPrefixedTables() with no tables error = %v", err)
 	}
 }
