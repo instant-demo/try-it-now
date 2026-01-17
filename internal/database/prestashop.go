@@ -5,11 +5,25 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/instant-demo/try-it-now/internal/config"
 	_ "github.com/go-sql-driver/mysql"
 )
+
+// ValidPrefixPattern matches valid database prefixes: 'd' + 8 hex chars + '_'
+// Example: d12345678_, dabcdef01_
+var ValidPrefixPattern = regexp.MustCompile(`^d[0-9a-f]{8}_$`)
+
+// validateDBPrefix validates that the database prefix matches the expected format.
+// This prevents SQL injection via malicious prefix values.
+func validateDBPrefix(prefix string) error {
+	if !ValidPrefixPattern.MatchString(prefix) {
+		return fmt.Errorf("invalid db prefix format: %s", prefix)
+	}
+	return nil
+}
 
 // PrestaShopDB provides database operations for PrestaShop instances.
 type PrestaShopDB struct {
@@ -43,6 +57,10 @@ func (p *PrestaShopDB) Close() error {
 // UpdateDomain updates the shop domain in PrestaShop configuration tables.
 // This MUST be called after CRIU restore to point the shop to the correct domain.
 func (p *PrestaShopDB) UpdateDomain(ctx context.Context, dbPrefix, newDomain string) error {
+	if err := validateDBPrefix(dbPrefix); err != nil {
+		return err
+	}
+
 	// Update shop_url table
 	shopURLQuery := fmt.Sprintf(`
 		UPDATE %sshop_url
@@ -71,6 +89,10 @@ func (p *PrestaShopDB) UpdateDomain(ctx context.Context, dbPrefix, newDomain str
 // ClearCaches truncates Smarty cache tables.
 // Call this after UpdateDomain to prevent stale cached domain references.
 func (p *PrestaShopDB) ClearCaches(ctx context.Context, dbPrefix string) error {
+	if err := validateDBPrefix(dbPrefix); err != nil {
+		return err
+	}
+
 	tables := []string{
 		dbPrefix + "smarty_cache",
 		dbPrefix + "smarty_lazy_cache",
@@ -90,6 +112,10 @@ func (p *PrestaShopDB) ClearCaches(ctx context.Context, dbPrefix string) error {
 // DropPrefixedTables drops all tables with the given prefix.
 // Use this for instance cleanup when TTL expires.
 func (p *PrestaShopDB) DropPrefixedTables(ctx context.Context, dbPrefix string) error {
+	if err := validateDBPrefix(dbPrefix); err != nil {
+		return err
+	}
+
 	// Query to get all tables with prefix
 	query := `
 		SELECT table_name FROM information_schema.tables

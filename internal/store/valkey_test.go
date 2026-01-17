@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -565,5 +567,332 @@ func TestValkeyRepository_ListExpired(t *testing.T) {
 	}
 	if len(expiredList) > 0 && expiredList[0].ID != expired.ID {
 		t.Errorf("ListExpired()[0].ID = %v, want %v", expiredList[0].ID, expired.ID)
+	}
+}
+
+// TestValkeyRepository_UpdateInstanceState_NotFound verifies the Lua script returns
+// ErrInstanceNotFound for non-existent instances.
+func TestValkeyRepository_UpdateInstanceState_NotFound(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	err := repo.UpdateInstanceState(ctx, "nonexistent-instance", domain.StateAssigned)
+	if err != domain.ErrInstanceNotFound {
+		t.Errorf("UpdateInstanceState() error = %v, want %v", err, domain.ErrInstanceNotFound)
+	}
+}
+
+// TestValkeyRepository_UpdateInstanceState_SameState verifies no-op when state unchanged.
+func TestValkeyRepository_UpdateInstanceState_SameState(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	instance := &domain.Instance{
+		ID:        "same-state-test-1",
+		Hostname:  "demo-same",
+		Port:      32060,
+		State:     domain.StateReady,
+		CreatedAt: time.Now(),
+	}
+
+	if err := repo.SaveInstance(ctx, instance); err != nil {
+		t.Fatalf("SaveInstance() error = %v", err)
+	}
+
+	// Update to same state should succeed without error
+	if err := repo.UpdateInstanceState(ctx, instance.ID, domain.StateReady); err != nil {
+		t.Errorf("UpdateInstanceState() to same state error = %v, want nil", err)
+	}
+
+	// Verify instance is still in correct state set
+	readyList, err := repo.ListByState(ctx, domain.StateReady)
+	if err != nil {
+		t.Fatalf("ListByState() error = %v", err)
+	}
+
+	found := false
+	for _, inst := range readyList {
+		if inst.ID == instance.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Instance should still be in ready state set")
+	}
+}
+
+// TestValkeyRepository_UpdateInstanceState_Concurrent tests that concurrent state updates
+// don't corrupt the state sets. This verifies the atomicity fix for try-it-now-8jj.
+func TestValkeyRepository_UpdateInstanceState_Concurrent(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	// Create multiple instances
+	const numInstances = 10
+	instances := make([]*domain.Instance, numInstances)
+	for i := 0; i < numInstances; i++ {
+		instances[i] = &domain.Instance{
+			ID:        "concurrent-state-" + string(rune('a'+i)),
+			Hostname:  "demo-concurrent",
+			Port:      32070 + i,
+			State:     domain.StateWarming,
+			CreatedAt: time.Now(),
+		}
+		if err := repo.SaveInstance(ctx, instances[i]); err != nil {
+			t.Fatalf("SaveInstance() error = %v", err)
+		}
+	}
+
+	// Concurrently update all instances through multiple state transitions
+	var wg sync.WaitGroup
+	var errors atomic.Int32
+
+	for _, inst := range instances {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			// Transition: warming -> ready -> assigned
+			if err := repo.UpdateInstanceState(ctx, id, domain.StateReady); err != nil {
+				t.Logf("UpdateInstanceState to ready error: %v", err)
+				errors.Add(1)
+				return
+			}
+			if err := repo.UpdateInstanceState(ctx, id, domain.StateAssigned); err != nil {
+				t.Logf("UpdateInstanceState to assigned error: %v", err)
+				errors.Add(1)
+			}
+		}(inst.ID)
+	}
+
+	wg.Wait()
+
+	if errors.Load() > 0 {
+		t.Fatalf("Got %d errors during concurrent updates", errors.Load())
+	}
+
+	// Verify all instances ended up in assigned state
+	assignedList, err := repo.ListByState(ctx, domain.StateAssigned)
+	if err != nil {
+		t.Fatalf("ListByState(assigned) error = %v", err)
+	}
+	if len(assignedList) != numInstances {
+		t.Errorf("ListByState(assigned) len = %d, want %d", len(assignedList), numInstances)
+	}
+
+	// Verify warming and ready sets are empty
+	warmingList, err := repo.ListByState(ctx, domain.StateWarming)
+	if err != nil {
+		t.Fatalf("ListByState(warming) error = %v", err)
+	}
+	// Filter out instances from other tests
+	warmingCount := 0
+	for _, inst := range warmingList {
+		for _, testInst := range instances {
+			if inst.ID == testInst.ID {
+				warmingCount++
+			}
+		}
+	}
+	if warmingCount != 0 {
+		t.Errorf("Warming state set should have 0 test instances, got %d", warmingCount)
+	}
+
+	readyList, err := repo.ListByState(ctx, domain.StateReady)
+	if err != nil {
+		t.Fatalf("ListByState(ready) error = %v", err)
+	}
+	readyCount := 0
+	for _, inst := range readyList {
+		for _, testInst := range instances {
+			if inst.ID == testInst.ID {
+				readyCount++
+			}
+		}
+	}
+	if readyCount != 0 {
+		t.Errorf("Ready state set should have 0 test instances, got %d", readyCount)
+	}
+
+	// Verify each instance has AssignedAt set
+	for _, inst := range instances {
+		got, err := repo.GetInstance(ctx, inst.ID)
+		if err != nil {
+			t.Fatalf("GetInstance(%s) error = %v", inst.ID, err)
+		}
+		if got.AssignedAt == nil {
+			t.Errorf("Instance %s AssignedAt should be set", inst.ID)
+		}
+	}
+}
+
+// TestValkeyRepository_AcquireFromPool_Concurrent tests that concurrent acquires
+// don't lose instances. This verifies the atomicity fix for try-it-now-4vf.
+func TestValkeyRepository_AcquireFromPool_Concurrent(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	// Create and add instances to pool
+	const numInstances = 20
+	for i := 0; i < numInstances; i++ {
+		instance := &domain.Instance{
+			ID:        "pool-concurrent-" + string(rune('a'+i)),
+			Hostname:  "demo-pool-concurrent",
+			Port:      32100 + i,
+			State:     domain.StateReady,
+			CreatedAt: time.Now(),
+		}
+		if err := repo.AddToPool(ctx, instance); err != nil {
+			t.Fatalf("AddToPool() error = %v", err)
+		}
+	}
+
+	// Concurrently acquire all instances
+	var wg sync.WaitGroup
+	acquired := make(chan string, numInstances)
+	var exhaustedCount atomic.Int32
+
+	// Use more goroutines than instances to create contention
+	const numGoroutines = 30
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			inst, err := repo.AcquireFromPool(ctx)
+			if err == domain.ErrPoolExhausted {
+				exhaustedCount.Add(1)
+				return
+			}
+			if err != nil {
+				t.Logf("AcquireFromPool error: %v", err)
+				return
+			}
+			acquired <- inst.ID
+		}()
+	}
+
+	wg.Wait()
+	close(acquired)
+
+	// Collect all acquired instance IDs
+	acquiredIDs := make(map[string]bool)
+	for id := range acquired {
+		if acquiredIDs[id] {
+			t.Errorf("Instance %s was acquired more than once!", id)
+		}
+		acquiredIDs[id] = true
+	}
+
+	// Verify exactly numInstances were acquired
+	if len(acquiredIDs) != numInstances {
+		t.Errorf("Acquired %d instances, want %d", len(acquiredIDs), numInstances)
+	}
+
+	// Verify exhausted count is correct (should be numGoroutines - numInstances)
+	expectedExhausted := int32(numGoroutines - numInstances)
+	if exhaustedCount.Load() != expectedExhausted {
+		t.Errorf("Got %d exhausted errors, want %d", exhaustedCount.Load(), expectedExhausted)
+	}
+
+	// Verify all acquired instances are in assigned state
+	assignedList, err := repo.ListByState(ctx, domain.StateAssigned)
+	if err != nil {
+		t.Fatalf("ListByState(assigned) error = %v", err)
+	}
+
+	// Count only our test instances
+	assignedCount := 0
+	for _, inst := range assignedList {
+		if acquiredIDs[inst.ID] {
+			assignedCount++
+			if inst.State != domain.StateAssigned {
+				t.Errorf("Instance %s state = %v, want assigned", inst.ID, inst.State)
+			}
+			if inst.AssignedAt == nil {
+				t.Errorf("Instance %s AssignedAt should be set", inst.ID)
+			}
+		}
+	}
+	if assignedCount != numInstances {
+		t.Errorf("Found %d assigned test instances, want %d", assignedCount, numInstances)
+	}
+
+	// Verify pool is empty
+	stats, err := repo.GetPoolStats(ctx)
+	if err != nil {
+		t.Fatalf("GetPoolStats() error = %v", err)
+	}
+	if stats.Ready != 0 {
+		t.Errorf("Pool should be empty, got Ready = %d", stats.Ready)
+	}
+}
+
+// TestValkeyRepository_AcquireFromPool_MissingInstance tests that the Lua script
+// correctly handles the case where an instance ID is in the pool but the instance
+// data doesn't exist (e.g., was deleted). The ID should be returned to the pool
+// and the acquire returns pool exhausted (since the script returns nil).
+func TestValkeyRepository_AcquireFromPool_MissingInstance(t *testing.T) {
+	repo := skipIfNoValkey(t)
+	defer repo.Close()
+
+	ctx := context.Background()
+
+	// Manually add an ID to the pool without creating the instance
+	orphanID := "orphan-instance-id"
+	if err := repo.client.Do(ctx, repo.client.B().Rpush().Key(keyPoolReady).Element(orphanID).Build()).Error(); err != nil {
+		t.Fatalf("Failed to push orphan ID to pool: %v", err)
+	}
+
+	// First acquire should fail because the instance data doesn't exist
+	// The Lua script will RPUSH the orphan ID back to the pool and return nil
+	_, err := repo.AcquireFromPool(ctx)
+	if err != domain.ErrPoolExhausted {
+		t.Errorf("AcquireFromPool() for orphan should return ErrPoolExhausted, got %v", err)
+	}
+
+	// Verify the orphan ID was pushed back to the pool (still there)
+	poolLen, err := repo.client.Do(ctx, repo.client.B().Llen().Key(keyPoolReady).Build()).ToInt64()
+	if err != nil {
+		t.Fatalf("Failed to get pool length: %v", err)
+	}
+	if poolLen != 1 {
+		t.Errorf("Pool length = %d, want 1 (orphan should be pushed back)", poolLen)
+	}
+
+	// Now add a valid instance
+	validInstance := &domain.Instance{
+		ID:        "valid-after-orphan",
+		Hostname:  "demo-valid",
+		Port:      32150,
+		State:     domain.StateReady,
+		CreatedAt: time.Now(),
+	}
+	if err := repo.AddToPool(ctx, validInstance); err != nil {
+		t.Fatalf("AddToPool() error = %v", err)
+	}
+
+	// Next acquire should get the orphan (LPOP) which fails, pushes it back,
+	// then we need to try again to get the valid one
+	// Actually, each call is atomic - the first call will fail on orphan
+	_, err = repo.AcquireFromPool(ctx)
+	if err != domain.ErrPoolExhausted {
+		t.Errorf("Second AcquireFromPool() should still fail on orphan, got %v", err)
+	}
+
+	// Third acquire - now the valid instance should be first (orphan at end)
+	got, err := repo.AcquireFromPool(ctx)
+	if err != nil {
+		t.Fatalf("Third AcquireFromPool() error = %v", err)
+	}
+	if got.ID != validInstance.ID {
+		t.Errorf("AcquireFromPool() ID = %v, want %v", got.ID, validInstance.ID)
 	}
 }

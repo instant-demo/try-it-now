@@ -9,6 +9,75 @@ import (
 	"github.com/instant-demo/try-it-now/internal/config"
 )
 
+func TestValidateDBPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		prefix  string
+		wantErr bool
+	}{
+		// Valid prefixes
+		{name: "valid numeric prefix", prefix: "d12345678_", wantErr: false},
+		{name: "valid hex prefix lowercase", prefix: "dabcdef01_", wantErr: false},
+		{name: "valid mixed hex prefix", prefix: "d1a2b3c4d_", wantErr: false},
+		{name: "valid all zeros", prefix: "d00000000_", wantErr: false},
+		{name: "valid all f", prefix: "dffffffff_", wantErr: false},
+
+		// Invalid prefixes - too short
+		{name: "too short 7 chars", prefix: "d1234567_", wantErr: true},
+		{name: "too short 6 chars", prefix: "d123456_", wantErr: true},
+		{name: "empty prefix", prefix: "", wantErr: true},
+
+		// Invalid prefixes - too long
+		{name: "too long 9 chars", prefix: "d123456789_", wantErr: true},
+		{name: "too long 10 chars", prefix: "d1234567890_", wantErr: true},
+
+		// Invalid prefixes - bad characters
+		{name: "uppercase hex", prefix: "dABCDEF01_", wantErr: true},
+		{name: "mixed case hex", prefix: "dAbCdEf01_", wantErr: true},
+		{name: "invalid char g", prefix: "d1234567g_", wantErr: true},
+		{name: "special chars", prefix: "d12345;--_", wantErr: true},
+
+		// Invalid prefixes - missing d prefix
+		{name: "missing d prefix", prefix: "12345678_", wantErr: true},
+		{name: "wrong prefix letter", prefix: "a12345678_", wantErr: true},
+		{name: "uppercase D", prefix: "D12345678_", wantErr: true},
+
+		// Invalid prefixes - missing underscore
+		{name: "missing underscore", prefix: "d12345678", wantErr: true},
+		{name: "wrong suffix", prefix: "d12345678-", wantErr: true},
+
+		// SQL injection attempts
+		{name: "sql injection drop table", prefix: "; DROP TABLE users; --", wantErr: true},
+		{name: "sql injection with prefix", prefix: "d12345678_; DROP TABLE--", wantErr: true},
+		{name: "sql injection quotes", prefix: "d12345678_' OR '1'='1", wantErr: true},
+		{name: "sql injection union", prefix: "d12345678_ UNION SELECT", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDBPrefix(tt.prefix)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateDBPrefix(%q) error = %v, wantErr %v", tt.prefix, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidPrefixPattern(t *testing.T) {
+	// Verify the pattern is correctly compiled
+	if ValidPrefixPattern == nil {
+		t.Fatal("ValidPrefixPattern is nil")
+	}
+
+	// Test the regex directly
+	if !ValidPrefixPattern.MatchString("d12345678_") {
+		t.Error("ValidPrefixPattern should match d12345678_")
+	}
+	if ValidPrefixPattern.MatchString("invalid") {
+		t.Error("ValidPrefixPattern should not match 'invalid'")
+	}
+}
+
 // skipIfNoMariaDB skips the test if PS_DB_TEST is not set or MariaDB is not available.
 func skipIfNoMariaDB(t *testing.T) *PrestaShopDB {
 	t.Helper()

@@ -13,6 +13,107 @@ import (
 	"github.com/valkey-io/valkey-go"
 )
 
+// Lua scripts for atomic operations
+var (
+	// updateInstanceStateScript atomically updates an instance's state.
+	// KEYS[1] = instance key (instance:{id})
+	// KEYS[2] = state set prefix (state:)
+	// ARGV[1] = new state
+	// ARGV[2] = instance ID
+	// ARGV[3] = assigned_at timestamp (RFC3339) - only used if new state is "assigned"
+	// Returns: the updated instance JSON, or nil if not found
+	updateInstanceStateScript = valkey.NewLuaScript(`
+local instanceKey = KEYS[1]
+local statePrefix = KEYS[2]
+local newState = ARGV[1]
+local instanceID = ARGV[2]
+local assignedAt = ARGV[3]
+
+-- Get current instance
+local data = redis.call('GET', instanceKey)
+if not data then
+    return nil
+end
+
+-- Decode instance JSON
+local instance = cjson.decode(data)
+local oldState = instance.state
+
+-- If state is unchanged, return current data
+if oldState == newState then
+    return data
+end
+
+-- Remove from old state set
+redis.call('SREM', statePrefix .. oldState, instanceID)
+
+-- Update instance state
+instance.state = newState
+
+-- Set assigned_at if transitioning to assigned state
+if newState == 'assigned' and (instance.assigned_at == nil or instance.assigned_at == cjson.null) then
+    instance.assigned_at = assignedAt
+end
+
+-- Save updated instance
+local newData = cjson.encode(instance)
+redis.call('SET', instanceKey, newData)
+
+-- Add to new state set
+redis.call('SADD', statePrefix .. newState, instanceID)
+
+return newData
+`)
+
+	// acquireFromPoolScript atomically pops an instance from the pool and marks it assigned.
+	// KEYS[1] = pool ready list key (pool:ready)
+	// KEYS[2] = instance key prefix (instance:)
+	// KEYS[3] = state set prefix (state:)
+	// ARGV[1] = assigned_at timestamp (RFC3339)
+	// Returns: the updated instance JSON, or nil if pool is empty or instance not found
+	acquireFromPoolScript = valkey.NewLuaScript(`
+local poolKey = KEYS[1]
+local instancePrefix = KEYS[2]
+local statePrefix = KEYS[3]
+local assignedAt = ARGV[1]
+
+-- Atomically pop from the ready list
+local id = redis.call('LPOP', poolKey)
+if not id then
+    return nil
+end
+
+-- Get the instance data
+local instanceKey = instancePrefix .. id
+local data = redis.call('GET', instanceKey)
+if not data then
+    -- Instance doesn't exist, push ID back to pool and return nil
+    redis.call('RPUSH', poolKey, id)
+    return nil
+end
+
+-- Decode instance
+local instance = cjson.decode(data)
+local oldState = instance.state
+
+-- Remove from old state set
+redis.call('SREM', statePrefix .. oldState, id)
+
+-- Update instance to assigned state
+instance.state = 'assigned'
+instance.assigned_at = assignedAt
+
+-- Save updated instance
+local newData = cjson.encode(instance)
+redis.call('SET', instanceKey, newData)
+
+-- Add to assigned state set
+redis.call('SADD', statePrefix .. 'assigned', id)
+
+return newData
+`)
+)
+
 // Redis key prefixes and names
 const (
 	keyInstance      = "instance:"       // instance:{id} -> JSON
@@ -150,74 +251,73 @@ func (r *ValkeyRepository) DeleteInstance(ctx context.Context, id string) error 
 	return nil
 }
 
-// UpdateInstanceState changes an instance's state.
+// UpdateInstanceState atomically changes an instance's state using a Lua script.
+// This ensures the GET, SREM, SET, and SADD operations happen atomically,
+// preventing race conditions under concurrent access.
 func (r *ValkeyRepository) UpdateInstanceState(ctx context.Context, id string, state domain.InstanceState) error {
-	instance, err := r.GetInstance(ctx, id)
-	if err != nil {
-		return err
-	}
+	instanceKey := keyInstance + id
+	now := time.Now().Format(time.RFC3339Nano)
 
-	oldState := instance.State
-	if oldState == state {
-		return nil // No change needed
-	}
+	// Execute the atomic Lua script
+	// KEYS: [instance:{id}, state:]
+	// ARGV: [newState, instanceID, assignedAt]
+	result := updateInstanceStateScript.Exec(
+		ctx,
+		r.client,
+		[]string{instanceKey, keyStateSet},
+		[]string{string(state), id, now},
+	)
 
-	// Remove from old state set
-	oldStateKey := keyStateSet + string(oldState)
-	if err := r.client.Do(ctx, r.client.B().Srem().Key(oldStateKey).Member(id).Build()).Error(); err != nil {
-		return fmt.Errorf("failed to remove from old state set: %w", err)
-	}
-
-	// Update instance
-	instance.State = state
-	if state == domain.StateAssigned && instance.AssignedAt == nil {
-		now := time.Now()
-		instance.AssignedAt = &now
-	}
-
-	// Save updated instance
-	data, err := json.Marshal(instance)
-	if err != nil {
-		return fmt.Errorf("failed to marshal instance: %w", err)
-	}
-
-	key := keyInstance + id
-	if err := r.client.Do(ctx, r.client.B().Set().Key(key).Value(string(data)).Build()).Error(); err != nil {
-		return fmt.Errorf("failed to save instance: %w", err)
-	}
-
-	// Add to new state set
-	newStateKey := keyStateSet + string(state)
-	if err := r.client.Do(ctx, r.client.B().Sadd().Key(newStateKey).Member(id).Build()).Error(); err != nil {
-		return fmt.Errorf("failed to add to new state set: %w", err)
+	if err := result.Error(); err != nil {
+		if valkey.IsValkeyNil(err) {
+			return domain.ErrInstanceNotFound
+		}
+		return fmt.Errorf("failed to update instance state: %w", err)
 	}
 
 	return nil
 }
 
 // AcquireFromPool atomically removes and returns an instance from the ready pool.
+// This uses a Lua script to ensure LPOP and state update happen atomically,
+// preventing instance loss if a crash occurs between operations.
 func (r *ValkeyRepository) AcquireFromPool(ctx context.Context) (*domain.Instance, error) {
-	// Atomically pop from the ready list
-	id, err := r.client.Do(ctx, r.client.B().Lpop().Key(keyPoolReady).Build()).ToString()
+	now := time.Now().Format(time.RFC3339Nano)
+
+	// Execute the atomic Lua script
+	// KEYS: [pool:ready, instance:, state:]
+	// ARGV: [assignedAt]
+	result := acquireFromPoolScript.Exec(
+		ctx,
+		r.client,
+		[]string{keyPoolReady, keyInstance, keyStateSet},
+		[]string{now},
+	)
+
+	// Check for nil (pool exhausted)
+	if err := result.Error(); err != nil {
+		if valkey.IsValkeyNil(err) {
+			return nil, domain.ErrPoolExhausted
+		}
+		return nil, fmt.Errorf("failed to acquire from pool: %w", err)
+	}
+
+	// Get the instance JSON from the result
+	data, err := result.ToString()
 	if err != nil {
 		if valkey.IsValkeyNil(err) {
 			return nil, domain.ErrPoolExhausted
 		}
-		return nil, fmt.Errorf("failed to pop from pool: %w", err)
+		return nil, fmt.Errorf("failed to get instance data: %w", err)
 	}
 
-	// Update state to assigned first
-	if err := r.UpdateInstanceState(ctx, id, domain.StateAssigned); err != nil {
-		return nil, err
+	// Deserialize the instance
+	var instance domain.Instance
+	if err := json.Unmarshal([]byte(data), &instance); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal instance: %w", err)
 	}
 
-	// Get the updated instance
-	instance, err := r.GetInstance(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	return instance, nil
+	return &instance, nil
 }
 
 // AddToPool adds an instance to the ready pool.
