@@ -23,8 +23,14 @@ import (
 const MinCRIUVersion = 31100
 
 // PodmanRuntime implements Runtime using the Podman API with CRIU support.
+//
+// NOTE: The conn field represents the connection's lifetime, not individual
+// request lifetimes. This follows Podman's connection pattern for long-lived
+// connections. For per-operation timeouts, wrap calls with a child context.
 type PodmanRuntime struct {
-	conn          context.Context // Podman connection context
+	// conn holds the connection lifetime context. Individual operations
+	// should derive child contexts for per-operation deadlines.
+	conn          context.Context
 	cfg           *config.ContainerConfig
 	psCfg         *config.PrestaShopConfig
 	proxyCfg      *config.ProxyConfig

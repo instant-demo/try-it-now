@@ -71,7 +71,9 @@ func RequestID() gin.HandlerFunc {
 // Returns an empty string if no request ID is present.
 func GetRequestID(c *gin.Context) string {
 	if id, exists := c.Get(RequestIDKey); exists {
-		return id.(string)
+		if s, ok := id.(string); ok {
+			return s
+		}
 	}
 	return ""
 }

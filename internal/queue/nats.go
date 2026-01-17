@@ -245,7 +245,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 						"stack", string(debug.Stack()))
 				}
 			}()
-			c.runProvisionWorker(provisionCons, workerID)
+			c.runProvisionWorker(ctx, provisionCons, workerID)
 		}(i)
 	}
 
@@ -262,7 +262,7 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 						"stack", string(debug.Stack()))
 				}
 			}()
-			c.runCleanupWorker(cleanupCons, workerID)
+			c.runCleanupWorker(ctx, cleanupCons, workerID)
 		}(i)
 	}
 
@@ -278,13 +278,15 @@ func (c *NATSConsumer) Start(ctx context.Context) error {
 }
 
 // runProvisionWorker processes provision tasks.
-func (c *NATSConsumer) runProvisionWorker(cons jetstream.Consumer, workerID int) {
+func (c *NATSConsumer) runProvisionWorker(ctx context.Context, cons jetstream.Consumer, workerID int) {
 	c.logger.Info("Provision worker started", "workerID", workerID)
 	defer c.logger.Info("Provision worker stopped", "workerID", workerID)
 
 	for {
 		select {
 		case <-c.stopCh:
+			return
+		case <-ctx.Done():
 			return
 		default:
 		}
@@ -307,10 +309,16 @@ func (c *NATSConsumer) runProvisionWorker(cons jetstream.Consumer, workerID int)
 					c.logger.Warn("Failed to NAK provision message during shutdown", "workerID", workerID, "error", err)
 				}
 				return
+			case <-ctx.Done():
+				// NAK so message gets redelivered to another worker
+				if err := msg.Nak(); err != nil {
+					c.logger.Warn("Failed to NAK provision message during context cancellation", "workerID", workerID, "error", err)
+				}
+				return
 			default:
 				// Continue processing
 			}
-			c.processProvisionMessage(msg, workerID)
+			c.processProvisionMessage(ctx, msg, workerID)
 		}
 
 		if msgs.Error() != nil && msgs.Error() != context.DeadlineExceeded {
@@ -319,7 +327,7 @@ func (c *NATSConsumer) runProvisionWorker(cons jetstream.Consumer, workerID int)
 	}
 }
 
-func (c *NATSConsumer) processProvisionMessage(msg jetstream.Msg, workerID int) {
+func (c *NATSConsumer) processProvisionMessage(parentCtx context.Context, msg jetstream.Msg, workerID int) {
 	var task ProvisionTask
 	if err := json.Unmarshal(msg.Data(), &task); err != nil {
 		c.logger.Warn("Failed to unmarshal provision task", "workerID", workerID, "error", err)
@@ -329,7 +337,7 @@ func (c *NATSConsumer) processProvisionMessage(msg jetstream.Msg, workerID int) 
 
 	c.logger.Info("Processing provision task", "workerID", workerID, "taskID", task.TaskID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 	defer cancel()
 
 	if err := c.provisionHandler(ctx, task); err != nil {
@@ -343,13 +351,15 @@ func (c *NATSConsumer) processProvisionMessage(msg jetstream.Msg, workerID int) 
 }
 
 // runCleanupWorker processes cleanup tasks.
-func (c *NATSConsumer) runCleanupWorker(cons jetstream.Consumer, workerID int) {
+func (c *NATSConsumer) runCleanupWorker(ctx context.Context, cons jetstream.Consumer, workerID int) {
 	c.logger.Info("Cleanup worker started", "workerID", workerID)
 	defer c.logger.Info("Cleanup worker stopped", "workerID", workerID)
 
 	for {
 		select {
 		case <-c.stopCh:
+			return
+		case <-ctx.Done():
 			return
 		default:
 		}
@@ -372,10 +382,16 @@ func (c *NATSConsumer) runCleanupWorker(cons jetstream.Consumer, workerID int) {
 					c.logger.Warn("Failed to NAK cleanup message during shutdown", "workerID", workerID, "error", err)
 				}
 				return
+			case <-ctx.Done():
+				// NAK so message gets redelivered to another worker
+				if err := msg.Nak(); err != nil {
+					c.logger.Warn("Failed to NAK cleanup message during context cancellation", "workerID", workerID, "error", err)
+				}
+				return
 			default:
 				// Continue processing
 			}
-			c.processCleanupMessage(msg, workerID)
+			c.processCleanupMessage(ctx, msg, workerID)
 		}
 
 		if msgs.Error() != nil && msgs.Error() != context.DeadlineExceeded {
@@ -384,7 +400,7 @@ func (c *NATSConsumer) runCleanupWorker(cons jetstream.Consumer, workerID int) {
 	}
 }
 
-func (c *NATSConsumer) processCleanupMessage(msg jetstream.Msg, workerID int) {
+func (c *NATSConsumer) processCleanupMessage(parentCtx context.Context, msg jetstream.Msg, workerID int) {
 	var task CleanupTask
 	if err := json.Unmarshal(msg.Data(), &task); err != nil {
 		c.logger.Warn("Failed to unmarshal cleanup task", "workerID", workerID, "error", err)
@@ -394,7 +410,7 @@ func (c *NATSConsumer) processCleanupMessage(msg jetstream.Msg, workerID int) {
 
 	c.logger.Info("Processing cleanup task", "workerID", workerID, "taskID", task.TaskID, "instanceID", task.InstanceID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, 60*time.Second)
 	defer cancel()
 
 	if err := c.cleanupHandler(ctx, task); err != nil {

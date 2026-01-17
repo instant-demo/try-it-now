@@ -437,7 +437,12 @@ func (r *ValkeyRepository) ListByState(ctx context.Context, state domain.Instanc
 		instance, err := r.GetInstance(ctx, id)
 		if err != nil {
 			if errors.Is(err, domain.ErrInstanceNotFound) {
-				continue // Instance was deleted, skip
+				// Instance may have been cleaned up between listing state set members
+				// and fetching the instance. This is expected under concurrent operations
+				// where one goroutine may delete an instance while another is iterating.
+				// We skip it rather than returning an error, as this represents a benign
+				// race condition during cleanup, not a data corruption issue.
+				continue
 			}
 			return nil, err
 		}

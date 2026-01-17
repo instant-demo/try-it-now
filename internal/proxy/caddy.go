@@ -36,6 +36,12 @@ func NewCaddyRouteManager(cfg *config.ProxyConfig, m *metrics.Collector) *CaddyR
 		baseDomain: cfg.BaseDomain,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 10,
+				MaxConnsPerHost:     20,
+				IdleConnTimeout:     90 * time.Second,
+			},
 		},
 		serverName: "demo", // We'll create a dedicated server for demo routes
 		metrics:    m,
